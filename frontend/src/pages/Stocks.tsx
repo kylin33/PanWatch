@@ -211,7 +211,7 @@ export default function StocksPage() {
 
   // Position form
   const [positionDialogOpen, setPositionDialogOpen] = useState(false)
-  const [positionForm, setPositionForm] = useState<PositionForm>({ account_id: 0, stock_id: 0, cost_price: '', quantity: '', invested_amount: '', trading_style: 'swing', stock_symbol: '', stock_name: '', stock_market: 'CN' })
+  const [positionForm, setPositionForm] = useState<PositionForm>({ account_id: 0, stock_id: 0, cost_price: '', quantity: '', invested_amount: '', trading_style: '', stock_symbol: '', stock_name: '', stock_market: 'CN' })
   const [editPositionId, setEditPositionId] = useState<number | null>(null)
   const [positionDialogAccountId, setPositionDialogAccountId] = useState<number | null>(null)
   const [positionSearchQuery, setPositionSearchQuery] = useState('')
@@ -473,7 +473,7 @@ export default function StocksPage() {
         cost_price: position.cost_price.toString(),
         quantity: position.quantity.toString(),
         invested_amount: position.invested_amount?.toString() || '',
-        trading_style: position.trading_style || 'swing',
+        trading_style: position.trading_style || '',
         stock_symbol: position.symbol,
         stock_name: position.name,
         stock_market: position.market,
@@ -486,7 +486,7 @@ export default function StocksPage() {
         cost_price: '',
         quantity: '',
         invested_amount: '',
-        trading_style: 'swing',
+        trading_style: '',
         stock_symbol: '',
         stock_name: '',
         stock_market: 'CN',
@@ -562,7 +562,7 @@ export default function StocksPage() {
       cost_price: parseFloat(positionForm.cost_price),
       quantity: parseInt(positionForm.quantity),
       invested_amount: positionForm.invested_amount ? parseFloat(positionForm.invested_amount) : null,
-      trading_style: positionForm.trading_style,
+      trading_style: positionForm.trading_style || null,
     }
     if (editPositionId) {
       await fetchAPI(`/positions/${editPositionId}`, { method: 'PUT', body: JSON.stringify(payload) })
@@ -1166,9 +1166,13 @@ export default function StocksPage() {
                                     ) : '—'}
                                   </td>
                                   <td className="px-4 py-2.5 text-center">
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
-                                      {pos.trading_style === 'short' ? '短线' : pos.trading_style === 'long' ? '长线' : '波段'}
-                                    </span>
+                                    {pos.trading_style ? (
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
+                                        {pos.trading_style === 'short' ? '短线' : pos.trading_style === 'long' ? '长线' : '波段'}
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] text-muted-foreground/50">-</span>
+                                    )}
                                   </td>
                                   <td className="px-4 py-2.5">
                                     {stock && (
@@ -1219,9 +1223,11 @@ export default function StocksPage() {
                                   <span className={`text-[9px] px-1 py-0.5 rounded ${badge.style}`}>{badge.label}</span>
                                   <span className="font-mono text-[12px] font-semibold text-foreground">{pos.symbol}</span>
                                   <span className="text-[12px] text-muted-foreground">{pos.name}</span>
-                                  <span className={`text-[9px] px-1 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
-                                    {pos.trading_style === 'short' ? '短' : pos.trading_style === 'long' ? '长' : '波'}
-                                  </span>
+                                  {pos.trading_style && (
+                                    <span className={`text-[9px] px-1 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
+                                      {pos.trading_style === 'short' ? '短' : pos.trading_style === 'long' ? '长' : '波'}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className={`font-mono text-[13px] font-medium ${changeColor}`}>
                                   {pos.current_price?.toFixed(2) || '—'}
@@ -1498,15 +1504,16 @@ export default function StocksPage() {
                 />
               </div>
               <div>
-                <Label>交易风格</Label>
+                <Label>交易风格 <span className="text-muted-foreground font-normal">(选填)</span></Label>
                 <Select
                   value={positionForm.trading_style}
-                  onValueChange={val => setPositionForm({ ...positionForm, trading_style: val })}
+                  onValueChange={val => setPositionForm({ ...positionForm, trading_style: val === '__none__' ? '' : val })}
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="不设置" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__none__">不设置</SelectItem>
                     <SelectItem value="short">短线 (1-5天)</SelectItem>
                     <SelectItem value="swing">波段 (1-4周)</SelectItem>
                     <SelectItem value="long">长线 (数月)</SelectItem>
