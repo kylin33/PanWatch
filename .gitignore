@@ -6,6 +6,7 @@ venv/
 data/*.db
 data/*.json
 data/ca-bundle.pem
+.docs
 .idea/
 .vscode/
 *.egg-info/

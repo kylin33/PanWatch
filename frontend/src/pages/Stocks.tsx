@@ -721,8 +721,42 @@ export default function StocksPage() {
               })}
             </div>
           </div>
-          {/* Desktop buttons */}
-          <div className="hidden md:flex items-center gap-2">
+          {/* Desktop buttons + controls */}
+          <div className="hidden md:flex items-center gap-3">
+            {/* Controls */}
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-accent/30">
+              <div className="flex items-center gap-1.5">
+                <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} className="scale-90" />
+                <span className="text-[11px] text-muted-foreground">自动刷新</span>
+                {autoRefresh && (
+                  <Select value={refreshInterval.toString()} onValueChange={v => setRefreshInterval(parseInt(v))}>
+                    <SelectTrigger className="h-6 w-14 text-[10px] px-1.5">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="10">10s</SelectItem>
+                      <SelectItem value="30">30s</SelectItem>
+                      <SelectItem value="60">1分钟</SelectItem>
+                      <SelectItem value="120">2分钟</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <div className="w-px h-4 bg-border" />
+              <div className="flex items-center gap-1.5">
+                <Switch checked={enableAIAnalysis} onCheckedChange={setEnableAIAnalysis} className="scale-90" />
+                <span className="text-[11px] text-muted-foreground">AI 建议</span>
+              </div>
+              {lastRefreshTime && (
+                <>
+                  <div className="w-px h-4 bg-border" />
+                  <span className="text-[10px] text-muted-foreground/60">
+                    {lastRefreshTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                </>
+              )}
+            </div>
+            {/* Buttons */}
             <Button variant="secondary" onClick={handleRefresh} disabled={portfolioLoading || scanning}>
               <RefreshCw className={`w-4 h-4 ${portfolioLoading || scanning ? 'animate-spin' : ''}`} />
               刷新
@@ -747,12 +781,12 @@ export default function StocksPage() {
             </Button>
           </div>
         </div>
-        {/* Controls row */}
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Mobile Controls row */}
+        <div className="flex md:hidden items-center gap-2 flex-wrap">
           <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-accent/30">
             <div className="flex items-center gap-1">
               <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} className="scale-90" />
-              <span className="text-[11px] text-muted-foreground hidden sm:inline">自动刷新</span>
+              <span className="text-[11px] text-muted-foreground">自动刷新</span>
               {autoRefresh && (
                 <Select value={refreshInterval.toString()} onValueChange={v => setRefreshInterval(parseInt(v))}>
                   <SelectTrigger className="h-6 w-14 text-[10px] px-1.5">
@@ -767,10 +801,10 @@ export default function StocksPage() {
                 </Select>
               )}
             </div>
-            <div className="w-px h-4 bg-border hidden sm:block" />
+            <div className="w-px h-4 bg-border" />
             <div className="flex items-center gap-1">
               <Switch checked={enableAIAnalysis} onCheckedChange={setEnableAIAnalysis} className="scale-90" />
-              <span className="text-[11px] text-muted-foreground hidden sm:inline">AI 建议</span>
+              <span className="text-[11px] text-muted-foreground">AI 建议</span>
             </div>
           </div>
           {lastRefreshTime && (
