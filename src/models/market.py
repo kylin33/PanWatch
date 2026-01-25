@@ -72,7 +72,7 @@ MARKETS: dict[MarketCode, MarketDef] = {
     MarketCode.US: MarketDef(
         code=MarketCode.US,
         name="美股",
-        timezone="US/Eastern",
+        timezone="America/New_York",
         sessions=[
             TradingSession(time(9, 30), time(16, 0)),
         ],
