@@ -117,7 +117,7 @@ class PositionCreate(BaseModel):
     cost_price: float
     quantity: int
     invested_amount: float | None = None
-    trading_style: str = "swing"  # short: 短线, swing: 波段, long: 长线
+    trading_style: str | None = None  # short: 短线, swing: 波段, long: 长线
 
 
 class PositionUpdate(BaseModel):
@@ -230,7 +230,7 @@ def list_positions(
             "cost_price": pos.cost_price,
             "quantity": pos.quantity,
             "invested_amount": pos.invested_amount,
-            "trading_style": pos.trading_style or "swing",
+            "trading_style": pos.trading_style,
             "account_name": pos.account.name if pos.account else None,
             "stock_symbol": pos.stock.symbol if pos.stock else None,
             "stock_name": pos.stock.name if pos.stock else None,
@@ -436,7 +436,7 @@ def get_portfolio_summary(account_id: int | None = None, db: Session = Depends(g
                 "cost_price": pos.cost_price,
                 "quantity": pos.quantity,
                 "invested_amount": pos.invested_amount,
-                "trading_style": pos.trading_style or "swing",
+                "trading_style": pos.trading_style,
                 "current_price": current_price,
                 "current_price_cny": round(current_price * rate, 2) if current_price else None,
                 "change_pct": change_pct,
