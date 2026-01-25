@@ -562,7 +562,7 @@ export default function StocksPage() {
       cost_price: parseFloat(positionForm.cost_price),
       quantity: parseInt(positionForm.quantity),
       invested_amount: positionForm.invested_amount ? parseFloat(positionForm.invested_amount) : null,
-      trading_style: positionForm.trading_style || null,
+      trading_style: positionForm.trading_style,  // 空字符串表示清空
     }
     if (editPositionId) {
       await fetchAPI(`/positions/${editPositionId}`, { method: 'PUT', body: JSON.stringify(payload) })

@@ -299,7 +299,8 @@ def update_position(position_id: int, data: PositionUpdate, db: Session = Depend
     if data.invested_amount is not None:
         position.invested_amount = data.invested_amount
     if data.trading_style is not None:
-        position.trading_style = data.trading_style
+        # 空字符串表示清空，设为 None
+        position.trading_style = data.trading_style if data.trading_style else None
 
     db.commit()
     db.refresh(position)

@@ -53,8 +53,9 @@ def _parse_tencent_line(line: str) -> dict | None:
                     pass
 
         # 处理美股 symbol（如 AAPL.OQ -> AAPL）
+        # 注意：指数 symbol 以 . 开头（如 .IXIC, .DJI），需要保留
         symbol = parts[2]
-        if "." in symbol:
+        if "." in symbol and not symbol.startswith("."):
             symbol = symbol.split(".")[0]
 
         return {
