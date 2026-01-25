@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 97%;
+    --foreground: 220 20% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 10%;
+    --primary: 234 85% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 15% 94%;
+    --secondary-foreground: 220 15% 40%;
+    --muted: 220 15% 94%;
+    --muted-foreground: 220 10% 50%;
+    --accent: 220 15% 92%;
+    --accent-foreground: 220 20% 10%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 60% 42%;
+    --success-foreground: 0 0% 100%;
+    --border: 220 15% 90%;
+    --input: 220 15% 90%;
+    --ring: 234 85% 55%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 224 20% 6%;
+    --foreground: 220 15% 90%;
+    --card: 224 20% 10%;
+    --card-foreground: 220 15% 90%;
+    --popover: 224 20% 10%;
+    --popover-foreground: 220 15% 90%;
+    --primary: 234 85% 62%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 224 15% 15%;
+    --secondary-foreground: 220 15% 70%;
+    --muted: 224 15% 15%;
+    --muted-foreground: 220 10% 50%;
+    --accent: 224 15% 18%;
+    --accent-foreground: 220 15% 90%;
+    --destructive: 0 60% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 50% 38%;
+    --success-foreground: 0 0% 100%;
+    --border: 224 15% 16%;
+    --input: 224 15% 18%;
+    --ring: 234 85% 62%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply text-foreground antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: linear-gradient(135deg, hsl(var(--background)) 0%, hsl(var(--background)) 60%, hsl(var(--primary) / 0.04) 100%);
+    min-height: 100vh;
+  }
+  code, .font-mono {
+    font-family: "SF Mono", "Cascadia Code", "Source Code Pro", ui-monospace, monospace;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-card rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04),0_4px_24px_rgba(0,0,0,0.04)];
+  }
+  .card-hover {
+    @apply bg-card rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04),0_4px_24px_rgba(0,0,0,0.04)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.06),0_8px_32px_rgba(0,0,0,0.06)] transition-shadow;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-primary to-[hsl(260,70%,55%)] text-white rounded-xl text-[13px] font-semibold shadow-[0_2px_8px_rgba(79,70,229,0.3)] hover:shadow-[0_4px_16px_rgba(79,70,229,0.4)] active:scale-[0.97] transition-all;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-card border border-border text-foreground rounded-xl text-[13px] font-medium shadow-[0_1px_3px_rgba(0,0,0,0.04)] hover:shadow-[0_2px_8px_rgba(0,0,0,0.08)] active:scale-[0.97] transition-all;
+  }
+  .input-field {
+    @apply w-full h-10 px-4 rounded-xl border border-border bg-card text-[13px] shadow-[0_1px_2px_rgba(0,0,0,0.04)] placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30 transition-all;
+  }
+}
+
+.dark .card {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2), 0 4px 24px rgba(0,0,0,0.15);
+}
+.dark .card-hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2), 0 4px 24px rgba(0,0,0,0.15);
+}
+.dark .card-hover:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3), 0 8px 32px rgba(0,0,0,0.2);
+}
+.dark .btn-primary {
+  box-shadow: 0 2px 8px rgba(99,90,255,0.3);
+}
+.dark .btn-primary:hover {
+  box-shadow: 0 4px 16px rgba(99,90,255,0.4);
+}

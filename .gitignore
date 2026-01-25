@@ -11,3 +11,12 @@ data/ca-bundle.pem
 *.egg-info/
 dist/
 build/
+
+# Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+pnpm-debug.log*
+
+# Claude
+.claude/
