@@ -35,14 +35,8 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
       return
     }
 
-    // 检查是否需要认证（服务器是否设置了密码）
-    fetch('/api/auth/status')
-      .then(res => res.json())
-      .then(data => {
-        // 无论是否设置密码，都需要去登录页（设置密码或登录）
-        setAuthState('unauthenticated')
-      })
-      .catch(() => setAuthState('unauthenticated'))
+    // 没有 token，需要去登录页（设置密码或登录）
+    setAuthState('unauthenticated')
   }, [])
 
   if (authState === 'checking') {
