@@ -1,10 +1,12 @@
 """盘中监测 Agent - 实时监控持仓，AI 判断是否需要提醒"""
 import logging
+import re
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult
 from src.collectors.akshare_collector import AkshareCollector
+from src.collectors.kline_collector import KlineCollector
 from src.core.analysis_history import get_latest_analysis, get_analysis
 from src.models.market import MarketCode, StockData, MARKETS
 
@@ -18,6 +20,17 @@ def is_any_market_trading() -> bool:
             return True
     return False
 
+
+# 标准化操作建议
+SUGGESTION_TYPES = {
+    "建仓": "buy",      # 新开仓位
+    "加仓": "add",      # 增加现有仓位
+    "减仓": "reduce",   # 减少仓位
+    "清仓": "sell",     # 全部卖出
+    "持有": "hold",     # 维持现状
+    "观望": "watch",    # 暂不操作
+}
+
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "intraday_monitor.txt"
 
 
@@ -29,6 +42,7 @@ class IntradayMonitorAgent(BaseAgent):
     - 单只模式 (single): 逐只股票分析，每只单独发送通知
     - AI 智能判断: 把股票数据发给 AI，由 AI 决定是否值得提醒
     - 通知节流: 同一股票短时间内不重复通知
+    - 技术分析: 包含 K 线和技术指标
     """
 
     name = "intraday_monitor"
@@ -45,7 +59,7 @@ class IntradayMonitorAgent(BaseAgent):
         self.bypass_throttle = bypass_throttle
 
     async def collect(self, context: AgentContext) -> dict:
-        """采集实时行情 + 历史分析"""
+        """采集实时行情 + K线 + 历史分析"""
         # 检查是否在交易时段
         if not is_any_market_trading():
             logger.info("当前非交易时段，跳过盘中监测")
@@ -72,6 +86,17 @@ class IntradayMonitorAgent(BaseAgent):
         # 单只模式下只有一只股票
         stock_data = all_stocks[0] if all_stocks else None
 
+        # 采集 K 线和技术指标
+        kline_summary = None
+        if stock_data:
+            try:
+                stock_config = context.watchlist[0] if context.watchlist else None
+                market = stock_config.market if stock_config else MarketCode.CN
+                kline_collector = KlineCollector(market)
+                kline_summary = kline_collector.get_kline_summary(stock_data.symbol)
+            except Exception as e:
+                logger.warning(f"获取 K 线数据失败: {e}")
+
         # 获取历史分析（为 AI 提供更多上下文）
         daily_analysis = get_latest_analysis(
             agent_name="daily_report",
@@ -87,6 +112,7 @@ class IntradayMonitorAgent(BaseAgent):
         return {
             "stocks": all_stocks,
             "stock_data": stock_data,
+            "kline_summary": kline_summary,
             "daily_analysis": daily_analysis.content if daily_analysis else None,
             "premarket_analysis": premarket_analysis.content if premarket_analysis else None,
             "timestamp": datetime.now().isoformat(),
@@ -99,6 +125,11 @@ class IntradayMonitorAgent(BaseAgent):
         # 辅助函数：安全获取数值，None 转为默认值
         def safe_num(value, default=0):
             return value if value is not None else default
+
+        def format_num(value, precision=2):
+            if value is None:
+                return "N/A"
+            return f"{value:.{precision}f}"
 
         stock: StockData | None = data.get("stock_data")
         if not stock:
@@ -136,6 +167,24 @@ class IntradayMonitorAgent(BaseAgent):
         if turnover > 0:
             lines.append(f"- 成交额：{turnover / 10000:.0f} 万")
 
+        # K 线和技术指标
+        kline = data.get("kline_summary")
+        if kline and not kline.get("error"):
+            lines.append("\n## 技术分析")
+            lines.append(f"- 趋势：{kline.get('trend', 'N/A')}")
+            lines.append(f"- MACD：{kline.get('macd_status', 'N/A')}")
+            lines.append(f"- 近5日：{kline.get('recent_5_up', 0)}涨{5-kline.get('recent_5_up', 0)}跌")
+            lines.append(f"- 5日涨幅：{format_num(kline.get('change_5d'))}%")
+            lines.append(f"- 20日涨幅：{format_num(kline.get('change_20d'))}%")
+            lines.append(f"- MA5：{format_num(kline.get('ma5'))} | MA10：{format_num(kline.get('ma10'))} | MA20：{format_num(kline.get('ma20'))}")
+            lines.append(f"- 支撑位：{format_num(kline.get('support'))} | 压力位：{format_num(kline.get('resistance'))}")
+
+        # 账户资金情况
+        lines.append(f"\n## 账户资金")
+        lines.append(f"- 总可用资金：{context.portfolio.total_available_funds:.0f} 元")
+        for acc in context.portfolio.accounts:
+            lines.append(f"  - {acc.name}：{acc.available_funds:.0f} 元")
+
         # 各账户持仓信息
         if positions:
             lines.append(f"\n## 持仓情况（共 {len(positions)} 个账户）")
@@ -143,14 +192,24 @@ class IntradayMonitorAgent(BaseAgent):
                 cost_price = safe_num(pos.cost_price, 1)
                 pnl_pct = (current_price - cost_price) / cost_price * 100 if cost_price > 0 else 0
                 style_label = style_labels.get(pos.trading_style, "波段")
+                market_value = current_price * pos.quantity
+                # 找到对应账户的可用资金
+                acc_funds = 0
+                for acc in context.portfolio.accounts:
+                    if acc.id == pos.account_id:
+                        acc_funds = acc.available_funds
+                        break
+
                 lines.append(f"\n### 持仓 {i}：{pos.account_name}")
                 lines.append(f"- 交易风格：{style_label}")
                 lines.append(f"- 成本价：{cost_price:.2f}")
                 lines.append(f"- 持仓量：{pos.quantity} 股")
-                lines.append(f"- 持仓市值：{current_price * pos.quantity:.0f} 元")
+                lines.append(f"- 持仓市值：{market_value:.0f} 元")
                 lines.append(f"- 浮动盈亏：{pnl_pct:+.1f}%")
+                lines.append(f"- 账户可用：{acc_funds:.0f} 元")
         else:
             lines.append("\n## 未持仓（仅关注）")
+            lines.append(f"- 可用资金充足，可考虑建仓")
 
         # 历史分析上下文（帮助 AI 做出更好的判断）
         daily_analysis = data.get("daily_analysis")
@@ -170,10 +229,68 @@ class IntradayMonitorAgent(BaseAgent):
                 lines.append(f"\n### 今日盘前分析摘要")
                 lines.append(content)
 
-        lines.append("\n请结合历史分析和实时行情，判断是否有值得提醒用户的信号。")
+        lines.append("\n请结合技术分析、资金情况和历史分析，给出明确的操作建议。")
 
         user_content = "\n".join(lines)
         return system_prompt, user_content
+
+    def _parse_suggestion(self, content: str) -> dict:
+        """
+        从 AI 响应中解析操作建议
+
+        Returns:
+            {
+                "action": "hold",  # buy/add/reduce/sell/hold/watch
+                "action_label": "持有",
+                "signal": "...",
+                "reason": "...",
+                "should_alert": True
+            }
+        """
+        result = {
+            "action": "watch",
+            "action_label": "观望",
+            "signal": "",
+            "reason": "",
+            "should_alert": True,
+        }
+
+        # 检查是否无需提醒
+        if content.strip().startswith("[无需提醒]"):
+            result["should_alert"] = False
+            result["action"] = "hold"
+            result["action_label"] = "持有"
+            return result
+
+        # 提取建议类型
+        for label, action in SUGGESTION_TYPES.items():
+            if label in content:
+                result["action"] = action
+                result["action_label"] = label
+                break
+
+        # 提取信号
+        signal_match = re.search(r"「信号」(.+?)(?=「|$)", content, re.DOTALL)
+        if signal_match:
+            result["signal"] = signal_match.group(1).strip()[:50]
+
+        # 提取建议内容
+        suggest_match = re.search(r"「建议」(.+?)(?=「|$)", content, re.DOTALL)
+        if suggest_match:
+            suggest_text = suggest_match.group(1).strip()
+            # 从建议中提取操作类型
+            for label, action in SUGGESTION_TYPES.items():
+                if label in suggest_text:
+                    result["action"] = action
+                    result["action_label"] = label
+                    break
+
+        # 提取理由
+        reason_match = re.search(r"「理由」(.+?)(?=「|$)", content, re.DOTALL)
+        if reason_match:
+            result["reason"] = reason_match.group(1).strip()[:100]
+
+        return result
 
     async def analyze(self, context: AgentContext, data: dict) -> AnalysisResult:
         """AI 分析并判断是否需要提醒"""
@@ -206,8 +323,8 @@ class IntradayMonitorAgent(BaseAgent):
         # 打印 AI 返回结果
         logger.info(f"=== AI Response for {stock.symbol} ===\n{content}")
 
-        # 检查 AI 是否认为需要提醒（在 prompt 中要求 AI 以特定格式回复）
-        should_alert = not content.strip().startswith("[无需提醒]")
+        # 解析操作建议
+        suggestion = self._parse_suggestion(content)
 
         # 构建标题
         title = f"【{self.display_name}】{stock.name} {stock.change_pct:+.2f}%"
@@ -227,7 +344,9 @@ class IntradayMonitorAgent(BaseAgent):
                     "current_price": stock.current_price,
                     "change_pct": stock.change_pct,
                 },
-                "should_alert": should_alert,
+                "suggestion": suggestion,
+                "should_alert": suggestion["should_alert"],
+                "kline_summary": data.get("kline_summary"),
                 **data,
             },
         )

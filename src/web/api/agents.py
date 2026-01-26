@@ -1,9 +1,13 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from src.web.database import get_db
 from src.web.models import AgentConfig, AgentRun
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -129,12 +133,12 @@ def get_agent_history(agent_name: str, limit: int = 20, db: Session = Depends(ge
 @router.post("/intraday/scan")
 async def scan_intraday(analyze: bool = False, db: Session = Depends(get_db)):
     """
-    实时扫描盘中监测 Agent 关联的股票异动情况
+    实时扫描盘中监测 Agent 关联的股票
 
     设计说明：
     - 只扫描启用了「盘中监测」Agent 的股票
-    - 如果没有关联股票，返回提示信息
-    - analyze=True 时调用 AI 分析
+    - 返回所有股票的实时行情和技术分析
+    - analyze=True 时调用 AI 分析，返回结构化建议
 
     Args:
         analyze: 是否调用 AI 分析生成操作建议（默认 False）
@@ -145,6 +149,7 @@ async def scan_intraday(analyze: bool = False, db: Session = Depends(get_db)):
         build_context,
     )
     from src.collectors.akshare_collector import AkshareCollector
+    from src.collectors.kline_collector import KlineCollector
     from src.models.market import MarketCode, MARKETS
     from src.agents.intraday_monitor import IntradayMonitorAgent
 
@@ -155,10 +160,9 @@ async def scan_intraday(analyze: bool = False, db: Session = Depends(get_db)):
 
     if not watchlist:
         return {
-            "alerts": [],
+            "stocks": [],
             "message": "请先为股票启用「盘中监测」Agent",
             "scanned_count": 0,
-            "alert_count": 0,
             "has_watchlist": False,
         }
 
@@ -166,10 +170,9 @@ async def scan_intraday(analyze: bool = False, db: Session = Depends(get_db)):
     any_trading = any(m.is_trading_time() for m in MARKETS.values())
     if not any_trading:
         return {
-            "alerts": [],
+            "stocks": [],
             "message": "当前非交易时段",
             "scanned_count": len(watchlist),
-            "alert_count": 0,
             "is_trading": False,
             "has_watchlist": True,
         }
@@ -179,8 +182,10 @@ async def scan_intraday(analyze: bool = False, db: Session = Depends(get_db)):
 
     # 按市场分组采集行情
     market_symbols: dict[MarketCode, list] = {}
+    stock_market_map: dict[str, MarketCode] = {}
     for stock in watchlist:
         market_symbols.setdefault(stock.market, []).append(stock.symbol)
+        stock_market_map[stock.symbol] = stock.market
 
     all_quotes = []
     for market_code, symbols in market_symbols.items():
@@ -191,14 +196,11 @@ async def scan_intraday(analyze: bool = False, db: Session = Depends(get_db)):
         except Exception as e:
             logger.error(f"采集 {market_code.value} 行情失败: {e}")
 
-    # 检测异动（涨跌幅超过阈值）
-    ALERT_THRESHOLD = 3.0  # 涨跌幅超过 3% 视为异动
-    alerts = []
-
+    # 构建返回数据
+    results = []
     for quote in all_quotes:
         change_pct = quote.change_pct or 0
-        if abs(change_pct) < ALERT_THRESHOLD:
-            continue
+        market = stock_market_map.get(quote.symbol, MarketCode.CN)
 
         # 获取持仓信息
         positions = portfolio.get_positions_for_stock(quote.symbol)
@@ -209,66 +211,96 @@ async def scan_intraday(analyze: bool = False, db: Session = Depends(get_db)):
         if cost_price and quote.current_price:
             pnl_pct = (quote.current_price - cost_price) / cost_price * 100
 
-        alert_type = "急涨" if change_pct > 0 else "急跌"
+        # 获取技术分析
+        kline_summary = None
+        try:
+            kline_collector = KlineCollector(market)
+            kline_summary = kline_collector.get_kline_summary(quote.symbol)
+        except Exception as e:
+            logger.warning(f"获取 {quote.symbol} K线失败: {e}")
 
-        alerts.append({
+        # 判断异动类型
+        alert_type = None
+        if abs(change_pct) >= 3.0:
+            alert_type = "急涨" if change_pct > 0 else "急跌"
+
+        results.append({
             "symbol": quote.symbol,
             "name": quote.name,
-            "alert_type": alert_type,
+            "market": market.value,
             "current_price": quote.current_price,
             "change_pct": change_pct,
-            "message": f"{quote.name} {alert_type} {change_pct:+.2f}%",
+            "open_price": quote.open_price,
+            "high_price": quote.high_price,
+            "low_price": quote.low_price,
+            "volume": quote.volume,
+            "turnover": quote.turnover,
+            "alert_type": alert_type,
             "has_position": has_position,
             "cost_price": cost_price,
             "pnl_pct": pnl_pct,
             "trading_style": trading_style,
-            "suggestion": None,
+            "kline": kline_summary,
+            "suggestion": None,  # AI 建议
         })
 
-    # AI 分析：使用 Agent 进行分析
-    if analyze and alerts:
+    # AI 分析
+    if analyze and results:
         try:
             context = build_context(agent_name)
-            agent = IntradayMonitorAgent()
+            agent = IntradayMonitorAgent(bypass_throttle=True)
 
-            for alert in alerts:
-                if not alert["has_position"]:
-                    continue
+            for item in results:
                 try:
-                    # 构建单只股票的上下文
+                    # 构建完整的数据上下文
                     from src.models.market import StockData
                     stock_data = StockData(
-                        symbol=alert["symbol"],
-                        name=alert["name"],
-                        market=MarketCode.CN,
-                        current_price=alert["current_price"],
-                        change_pct=alert["change_pct"],
+                        symbol=item["symbol"],
+                        name=item["name"],
+                        market=MarketCode(item["market"]),
+                        current_price=item["current_price"],
+                        change_pct=item["change_pct"],
                         change_amount=0,
-                        volume=0,
-                        turnover=0,
-                        open_price=0,
-                        high_price=0,
-                        low_price=0,
+                        volume=item["volume"] or 0,
+                        turnover=item["turnover"] or 0,
+                        open_price=item["open_price"] or 0,
+                        high_price=item["high_price"] or 0,
+                        low_price=item["low_price"] or 0,
                         prev_close=0,
                     )
-                    data = {"stock_data": stock_data, "stocks": [stock_data]}
+
+                    data = {
+                        "stock_data": stock_data,
+                        "stocks": [stock_data],
+                        "kline_summary": item["kline"],
+                    }
+
                     system_prompt, user_content = agent.build_prompt(data, context)
-                    suggestion = await context.ai_client.chat(system_prompt, user_content)
-                    # 提取关键建议（去掉 [无需提醒] 标记等）
-                    suggestion = suggestion.strip()
-                    if suggestion.startswith("[无需提醒]"):
-                        suggestion = suggestion[6:].strip()
-                    alert["suggestion"] = suggestion[:100] if len(suggestion) > 100 else suggestion
+                    response = await context.ai_client.chat(system_prompt, user_content)
+
+                    # 解析结构化建议
+                    suggestion = agent._parse_suggestion(response)
+                    suggestion["raw"] = response.strip()[:200]
+
+                    item["suggestion"] = suggestion
+
                 except Exception as e:
-                    alert["suggestion"] = f"分析失败: {e}"
-                    logger.error(f"AI 分析失败 {alert['symbol']}: {e}")
+                    item["suggestion"] = {
+                        "action": "watch",
+                        "action_label": "观望",
+                        "signal": "",
+                        "reason": f"分析失败: {e}",
+                        "should_alert": False,
+                    }
+                    logger.error(f"AI 分析失败 {item['symbol']}: {e}")
+
         except Exception as e:
             logger.error(f"构建 Agent 上下文失败: {e}")
 
     return {
-        "alerts": alerts,
+        "stocks": results,
         "scanned_count": len(watchlist),
-        "alert_count": len(alerts),
         "is_trading": True,
         "has_watchlist": True,
+        "available_funds": portfolio.total_available_funds,
     }

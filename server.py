@@ -620,20 +620,23 @@ def build_scheduler() -> AgentScheduler:
     """构建调度器并注册已启用的 Agent"""
     sched = AgentScheduler()
 
+    # 设置 context 构建函数（每次执行时动态获取最新配置）
+    sched.set_context_builder(build_context)
+
     db = SessionLocal()
     try:
         agent_configs = db.query(AgentConfig).filter(AgentConfig.enabled == True).all()
         for cfg in agent_configs:
             agent_cls = AGENT_REGISTRY.get(cfg.name)
             if not agent_cls:
+                logger.warning(f"Agent {cfg.name} 未在 AGENT_REGISTRY 中注册")
                 continue
             if not cfg.schedule:
+                logger.info(f"Agent {cfg.name} 未设置调度计划，跳过")
                 continue
 
             agent_instance = agent_cls()
-            context = build_context(cfg.name)
-            sched.set_context(context)
-            sched.register(agent_instance, cron=cfg.schedule)
+            sched.register(agent_instance, schedule=cfg.schedule)
     finally:
         db.close()
 
