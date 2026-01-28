@@ -75,18 +75,7 @@ export function KlineSummaryDialog({
 
   type Action = 'buy' | 'add' | 'reduce' | 'sell' | 'hold' | 'watch' | 'avoid'
 
-  const actionLabel = (action: Action) => {
-    switch (action) {
-      case 'buy': return '买入'
-      case 'add': return '加仓'
-      case 'reduce': return '减仓'
-      case 'sell': return '卖出'
-      case 'hold': return '持有'
-      case 'watch': return '观望'
-      case 'avoid': return '回避'
-      default: return '观望'
-    }
-  }
+  // actionLabel 已由评分生成，组件内无需单独映射
 
   const actionStyle = (action: Action) => {
     switch (action) {

@@ -174,7 +174,6 @@ export function SuggestionBadge({
     if (!suggestion) return null
     const normalized = normalizeAction(suggestion.action, suggestion.action_label)
     const colorClass = normalized ? (actionColors[normalized] || 'bg-slate-500 text-white') : 'bg-slate-500 text-white'
-    const timeStr = formatSuggestionTime(suggestion.created_at)
     const isAI = !!suggestion.agent_name && suggestion.agent_label !== '技术指标'
     const aiLabel = normalized ? (actionLabels[normalized] || suggestion.action_label) : (suggestion.action_label || '观望')
     const tech = kline ? buildKlineSuggestion(kline as any, hasPosition) : null
@@ -346,6 +345,7 @@ export function SuggestionBadge({
     )
   }
 
+  if (!suggestion) return null
   const normalized = normalizeAction(suggestion.action, suggestion.action_label)
   const colorClass = normalized ? (actionColors[normalized] || 'bg-slate-500 text-white') : 'bg-slate-500 text-white'
   const displayLabel = normalized ? (actionLabels[normalized] || suggestion.action_label) : (suggestion.action_label || '观望')

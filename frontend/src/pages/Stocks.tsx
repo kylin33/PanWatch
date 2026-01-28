@@ -315,8 +315,8 @@ export default function StocksPage() {
   const [enableAIAnalysis, setEnableAIAnalysis] = useState(true)  // 是否启用 AI 分析建议
 
   // 股票 AI 建议（来自盘中监控 API）
-  const [suggestions, setSuggestions] = useState<Record<string, StockSuggestionData>>({})
-  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [suggestions] = useState<Record<string, StockSuggestionData>>({})
+  const [suggestionsLoading] = useState(false)
 
   // 建议池建议（来自 /suggestions API）
   const [poolSuggestions, setPoolSuggestions] = useState<Record<string, PoolSuggestion>>({})
