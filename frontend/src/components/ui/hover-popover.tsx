@@ -9,6 +9,7 @@ interface HoverPopoverProps {
   align?: 'start' | 'center' | 'end'
   className?: string
   popoverClassName?: string
+  openOnFocus?: boolean
 }
 
 export function HoverPopover({
@@ -19,6 +20,7 @@ export function HoverPopover({
   align = 'center',
   className,
   popoverClassName,
+  openOnFocus = false,
 }: HoverPopoverProps) {
   const sideClass = side === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'
   const alignClass =
@@ -39,7 +41,7 @@ export function HoverPopover({
           alignClass,
           'opacity-0 pointer-events-none translate-y-1 scale-[0.98] transition-all duration-150',
           'group-hover:opacity-100 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:scale-100',
-          'group-focus-within:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:scale-100',
+          openOnFocus && 'group-focus-within:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:scale-100',
         )}
       >
         <span className={cn('w-[22rem] max-w-[90vw] block rounded-xl bg-card border border-border shadow-[0_16px_60px_rgba(0,0,0,0.18)] p-3', popoverClassName)}>

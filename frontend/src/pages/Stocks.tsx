@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Plus, Trash2, Pencil, Search, X, TrendingUp, Bot, Play, RefreshCw, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, Building2, ChevronDown, ChevronRight, Cpu, Bell, Clock, Newspaper, ExternalLink, BarChart3 } from 'lucide-react'
 import { fetchAPI, useLocalStorage, type AIService, type NotifyChannel } from '@/lib/utils'
 import { SuggestionBadge, type SuggestionInfo, type KlineSummary } from '@/components/suggestion-badge'
+import { buildKlineSuggestion } from '@/lib/kline-scorer'
 import { KlineSummaryDialog } from '@/components/kline-summary-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -301,6 +302,7 @@ export default function StocksPage() {
   // Quotes for all stocks (used in stock list)
   const [quotes, setQuotes] = useState<Record<string, { current_price: number | null; change_pct: number | null }>>({})
   const [quotesLoading, setQuotesLoading] = useState(false)
+  const [klineSummaries, setKlineSummaries] = useState<Record<string, KlineSummary>>({})
 
   // Auto-refresh (持久化到 localStorage)
   const [autoRefresh, setAutoRefresh] = useLocalStorage('panwatch_stocks_autoRefresh', false)
@@ -335,6 +337,8 @@ export default function StocksPage() {
 
   // Market status
   const [marketStatus, setMarketStatus] = useState<MarketStatus[]>([])
+  // Guard to prevent overlapping K线刷新任务导致实际并发超限
+  const klineRefreshInFlight = useRef<Promise<void> | null>(null)
 
   // Stock form
   const [showStockForm, setShowStockForm] = useState(false)
@@ -366,6 +370,8 @@ export default function StocksPage() {
   // Agent dialog
   const [agentDialogStock, setAgentDialogStock] = useState<Stock | null>(null)
   const [triggeringAgent, setTriggeringAgent] = useState<string | null>(null)
+  // 运行中的单只股票 Agent（按股票标记具体 Agent 名称）
+  const [runningAgents, setRunningAgents] = useState<Record<number, string | null>>({})
   const [agentResultDialog, setAgentResultDialog] = useState<{ title: string; content: string; should_alert: boolean; notified: boolean } | null>(null)
 
   // Stock list filter
@@ -500,46 +506,41 @@ export default function StocksPage() {
   useEffect(() => {
     if (stocks.length === 0 && (!portfolioRaw || portfolioRaw.accounts.length === 0)) return
     refreshQuotes()
+    // 刷新 K 线摘要（用于常驻评分徽章）
+    ;(async () => {
+      try { await refreshKlines() } catch {}
+    })()
   }, [stocks, portfolioRaw, refreshQuotes])
 
-  // Scan for intraday alerts and load suggestions
-  const scanAlerts = useCallback(async () => {
-    setScanning(true)
-    setSuggestionsLoading(true)
-    try {
-      const url = enableAIAnalysis ? '/agents/intraday/scan?analyze=true' : '/agents/intraday/scan'
-      const result = await fetchAPI<{
-        stocks: Array<{
-          symbol: string
-          name: string
-          suggestion: SuggestionInfo | null
-          kline: KlineSummary | null
-        }>
-        scanned_count: number
-      }>(url, { method: 'POST' })
-
-      // 将结果转换为按 symbol 索引的 Map，方便持仓页面查找
-      const suggestionsMap: Record<string, StockSuggestionData> = {}
-      for (const stock of result.stocks || []) {
-        suggestionsMap[stock.symbol] = {
-          symbol: stock.symbol,
-          suggestion: stock.suggestion,
-          kline: stock.kline,
+  // 刷新 K 线摘要（并发受限的单个请求，避免批量接口慢）；并防止重入
+  const refreshKlines = useCallback(async () => {
+    if (klineRefreshInFlight.current) return klineRefreshInFlight.current
+    const run = (async () => {
+      const items = buildQuoteItems()
+      if (items.length === 0) return
+      const limit = 5
+      const map: Record<string, KlineSummary> = {}
+      let idx = 0
+      const worker = async () => {
+        while (idx < items.length) {
+          const i = idx++
+          const it = items[i]
+          try {
+            const res = await fetchAPI<{ symbol: string; market: string; summary: KlineSummary }>(`/klines/${encodeURIComponent(it.symbol)}/summary?market=${encodeURIComponent(it.market)}`)
+            if (res && (res as any).summary) {
+              map[it.symbol] = (res as any).summary as KlineSummary
+            }
+          } catch {
+            // ignore single failure
+          }
         }
       }
-      setSuggestions(suggestionsMap)
-      setLastRefreshTime(new Date())
-
-      // 扫描完成后重新加载建议池（获取刚保存的建议，包含来源和时间信息）
-      const poolData = await fetchAPI<Record<string, PoolSuggestion>>('/suggestions')
-      setPoolSuggestions(poolData)
-    } catch (e) {
-      console.error('扫描异动失败:', e)
-    } finally {
-      setScanning(false)
-      setSuggestionsLoading(false)
-    }
-  }, [enableAIAnalysis])
+      await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
+      setKlineSummaries(map)
+    })()
+    klineRefreshInFlight.current = run
+    try { await run } finally { klineRefreshInFlight.current = null }
+  }, [buildQuoteItems])
 
   // 从建议池加载建议（包含历史建议和多来源建议）
   const loadPoolSuggestions = useCallback(async () => {
@@ -589,26 +590,49 @@ export default function StocksPage() {
 
   // Refresh quotes only (decoupled from portfolio and scans)
   const handleRefresh = useCallback(async () => {
-    await refreshQuotes()
-  }, [refreshQuotes])
+    await Promise.all([
+      refreshQuotes(),
+      loadPoolSuggestions(),
+      refreshKlines(),
+    ])
+  }, [refreshQuotes, loadPoolSuggestions, refreshKlines])
 
-  useEffect(() => { load(); loadPortfolio(); loadPoolSuggestions() }, [])
+  useEffect(() => { load(); loadPortfolio(); loadPoolSuggestions(); refreshKlines() }, [])
 
-  // 持仓加载后自动获取 AI 建议
-  const initialSuggestionsDone = useRef(false)
-  useEffect(() => {
-    if (portfolio && portfolio.accounts.length > 0 && !initialSuggestionsDone.current) {
-      initialSuggestionsDone.current = true
-      scanAlerts()
+  // 触发扫描：调用盘中监控扫描，并刷新建议池
+  const scanAndReload = useCallback(async () => {
+    setScanning(true)
+    try {
+      const url = enableAIAnalysis ? '/agents/intraday/scan?analyze=true' : '/agents/intraday/scan'
+      await fetchAPI(url, { method: 'POST' })
+      await loadPoolSuggestions()
+      await refreshKlines()
+      setLastRefreshTime(new Date())
+    } catch (e) {
+      console.error('扫描失败:', e)
+    } finally {
+      setScanning(false)
     }
-  }, [portfolio])
+  }, [enableAIAnalysis, loadPoolSuggestions, refreshKlines])
+
+  // 首次加载后，按需刷新 K 线摘要与建议池
+  const initialKlineDone = useRef(false)
+  useEffect(() => {
+    if (portfolio && portfolio.accounts.length > 0 && !initialKlineDone.current) {
+      initialKlineDone.current = true
+      refreshKlines()
+      loadPoolSuggestions()
+    }
+  }, [portfolio, refreshKlines, loadPoolSuggestions])
 
   // Auto-refresh timer
   useEffect(() => {
     if (autoRefresh) {
       refreshQuotes()
+      refreshKlines()
       refreshTimerRef.current = setInterval(() => {
         refreshQuotes()
+        refreshKlines()
       }, refreshInterval * 1000)
     } else {
       // Clear interval when disabled
@@ -623,7 +647,7 @@ export default function StocksPage() {
         clearInterval(refreshTimerRef.current)
       }
     }
-  }, [autoRefresh, refreshInterval, refreshQuotes])
+  }, [autoRefresh, refreshInterval, refreshQuotes, refreshKlines])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -873,18 +897,22 @@ export default function StocksPage() {
 
   const triggerStockAgent = async (stockId: number, agentName: string) => {
     setTriggeringAgent(agentName)
+    setRunningAgents(prev => ({ ...prev, [stockId]: agentName }))
+    // 触发后立即关闭配置弹窗，避免多层弹窗干扰
+    setAgentDialogStock(null)
     try {
       // 手动触发时跳过节流，方便测试
       const resp = await fetchAPI<{ result: AgentResult }>(`/stocks/${stockId}/agents/${agentName}/trigger?bypass_throttle=true`, { method: 'POST' })
       const result = resp?.result
       if (result) {
-        setAgentResultDialog(result)
+        // 仅提示，不再弹出结果弹窗，避免干扰
         toast(result.should_alert ? 'AI 建议关注' : 'AI 判断无需关注', result.should_alert ? 'success' : 'info')
       }
     } catch (e) {
       toast(e instanceof Error ? e.message : '触发失败', 'error')
     } finally {
       setTriggeringAgent(null)
+      setRunningAgents(prev => ({ ...prev, [stockId]: null }))
     }
   }
 
@@ -950,10 +978,11 @@ export default function StocksPage() {
   }
 
   // 获取股票的建议信息（优先使用建议池，包含来源和时间信息）
-  const getSuggestionForStock = (symbol: string): { suggestion: SuggestionInfo | null; kline: KlineSummary | null } => {
+  const getSuggestionForStock = (symbol: string, hasPosition?: boolean): { suggestion: SuggestionInfo | null; kline: KlineSummary | null } => {
     // 优先使用建议池的建议（包含来源和时间信息）
     const poolSug = poolSuggestions[symbol]
     if (poolSug && !poolSug.is_expired) {
+      const preloadedKline = klineSummaries[symbol] || (suggestions[symbol]?.kline as any) || null
       return {
         suggestion: {
           action: poolSug.action,
@@ -968,16 +997,25 @@ export default function StocksPage() {
           prompt_context: poolSug.prompt_context,
           ai_response: poolSug.ai_response,
         },
-        kline: suggestions[symbol]?.kline || null,  // kline 来自 scan 结果
+        // 优先使用本页并发预取的 kline 摘要，确保徽章与弹窗一致且免加载
+        kline: preloadedKline,
       }
     }
 
-    // 如果没有池建议，使用扫描结果
-    const scanSug = suggestions[symbol]
-    if (scanSug) {
+    // 无池建议时，使用 K 线评分构建轻量建议（仅用于徽章展示）
+    const ks = klineSummaries[symbol]
+    if (ks) {
+      const scored = buildKlineSuggestion(ks as any, hasPosition)
       return {
-        suggestion: scanSug.suggestion,
-        kline: scanSug.kline,
+        suggestion: {
+          action: scored.action,
+          action_label: scored.action_label,
+          signal: scored.signal,
+          reason: '',
+          should_alert: false,
+          agent_label: '技术指标',
+        },
+        kline: ks,
       }
     }
 
@@ -1094,12 +1132,12 @@ export default function StocksPage() {
               <div className="flex items-center gap-1.5">
                 <Switch checked={enableAIAnalysis} onCheckedChange={setEnableAIAnalysis} className="scale-90" />
                 <span className="text-[11px] text-muted-foreground">AI 建议</span>
-                {suggestionsLoading && (
+                {poolSuggestionsLoading && (
                   <span className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
                 )}
-                {!suggestionsLoading && !poolSuggestionsLoading && (Object.keys(suggestions).length > 0 || Object.keys(poolSuggestions).length > 0) && (
+                {!poolSuggestionsLoading && Object.keys(poolSuggestions).length > 0 && (
                   <span className="text-[10px] text-primary">
-                    {new Set([...Object.keys(suggestions), ...Object.keys(poolSuggestions)]).size}
+                    {Object.keys(poolSuggestions).length}
                   </span>
                 )}
               </div>
@@ -1117,7 +1155,7 @@ export default function StocksPage() {
               <RefreshCw className={`w-4 h-4 ${quotesLoading ? 'animate-spin' : ''}`} />
               刷新
             </Button>
-            <Button variant="secondary" onClick={scanAlerts} disabled={scanning}>
+            <Button variant="secondary" onClick={scanAndReload} disabled={scanning}>
               <Bot className="w-4 h-4" /> 扫描
             </Button>
             <Button variant="secondary" onClick={() => openAccountDialog()}>
@@ -1132,7 +1170,7 @@ export default function StocksPage() {
             <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={handleRefresh} disabled={quotesLoading}>
               <RefreshCw className={`w-4 h-4 ${quotesLoading ? 'animate-spin' : ''}`} />
             </Button>
-            <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={scanAlerts} disabled={scanning}>
+            <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={scanAndReload} disabled={scanning}>
               <Bot className="w-4 h-4" />
             </Button>
             <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={() => openAccountDialog()}>
@@ -1441,7 +1479,7 @@ export default function StocksPage() {
                                     <span className="font-mono text-[12px] font-semibold text-foreground">{pos.symbol}</span>
                                     <span className="ml-1.5 text-[12px] text-muted-foreground">{pos.name}</span>
                                     {(() => {
-                                      const { suggestion, kline } = getSuggestionForStock(pos.symbol)
+                                      const { suggestion, kline } = getSuggestionForStock(pos.symbol, true)
                                       return (suggestion || kline) ? (
                                         <span className="ml-2">
                                           <SuggestionBadge
@@ -1449,6 +1487,8 @@ export default function StocksPage() {
                                             stockName={pos.name}
                                             stockSymbol={pos.symbol}
                                             kline={kline}
+                                            market={pos.market}
+                                            hasPosition={true}
                                           />
                                         </span>
                                       ) : null
@@ -1495,10 +1535,21 @@ export default function StocksPage() {
                                     {stock && (
                                       <button onClick={() => setAgentDialogStock(stock)} className="flex items-center gap-1.5 hover:opacity-70 transition-opacity">
                                         {stock.agents && stock.agents.length > 0 ? (
-                                          <div className="flex items-center gap-1 flex-wrap">
+                                          <div className="flex items-center gap-1.5 flex-wrap">
                                             {stock.agents.map(sa => {
                                               const agent = agents.find(a => a.name === sa.agent_name)
-                                              return <Badge key={sa.agent_name} variant="default" className="text-[10px]">{agent?.display_name || sa.agent_name}</Badge>
+                                              const isRunning = runningAgents[stock.id] === sa.agent_name
+                                              return (
+                                                <span key={sa.agent_name} className="inline-flex items-center gap-1">
+                                                  <Badge variant="default" className="text-[10px]">{agent?.display_name || sa.agent_name}</Badge>
+                                                  {isRunning && (
+                                                    <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+                                                      <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+                                                      执行中
+                                                    </span>
+                                                  )}
+                                                </span>
+                                              )
                                             })}
                                           </div>
                                         ) : (
@@ -1509,7 +1560,9 @@ export default function StocksPage() {
                                   </td>
                                   <td className="px-4 py-2.5 text-center">
                                     <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
+                                      {(() => { const { suggestion, kline } = getSuggestionForStock(pos.symbol, true); return (!suggestion && !kline) ? (
+                                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
+                                      ) : null })()}
                                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openNewsDialog(pos.name)} title="相关资讯"><Newspaper className="w-3 h-3" /></Button>
                                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPositionDialog(account.id, pos)}><Pencil className="w-3 h-3" /></Button>
                                       <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" onClick={() => handleDeletePosition(pos.id)}><Trash2 className="w-3 h-3" /></Button>
@@ -1547,13 +1600,15 @@ export default function StocksPage() {
                                     </span>
                                   )}
                                   {(() => {
-                                    const { suggestion, kline } = getSuggestionForStock(pos.symbol)
+                                    const { suggestion, kline } = getSuggestionForStock(pos.symbol, true)
                                     return (suggestion || kline) ? (
                                       <SuggestionBadge
                                         suggestion={suggestion}
                                         stockName={pos.name}
                                         stockSymbol={pos.symbol}
                                         kline={kline}
+                                        market={pos.market}
+                                        hasPosition={true}
                                       />
                                     ) : null
                                   })()}
@@ -1581,7 +1636,18 @@ export default function StocksPage() {
                                     <button onClick={() => setAgentDialogStock(stock)} className="flex items-center gap-1">
                                       {stock.agents.slice(0, 2).map(sa => {
                                         const agent = agents.find(a => a.name === sa.agent_name)
-                                        return <Badge key={sa.agent_name} variant="secondary" className="text-[9px]">{agent?.display_name || sa.agent_name}</Badge>
+                                        const isRunning = runningAgents[stock.id] === sa.agent_name
+                                        return (
+                                          <span key={sa.agent_name} className="inline-flex items-center gap-1">
+                                            <Badge variant="secondary" className="text-[9px]">{agent?.display_name || sa.agent_name}</Badge>
+                                            {isRunning && (
+                                              <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+                                                <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+                                                执行中
+                                              </span>
+                                            )}
+                                          </span>
+                                        )
                                       })}
                                     </button>
                                   ) : (
@@ -1591,7 +1657,9 @@ export default function StocksPage() {
                                   )}
                                 </div>
                                 <div className="flex items-center gap-1">
-                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
+                                  {(() => { const { suggestion, kline } = getSuggestionForStock(pos.symbol, true); return (!suggestion && !kline) ? (
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
+                                  ) : null })()}
                                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openNewsDialog(pos.name)}><Newspaper className="w-3 h-3" /></Button>
                                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPositionDialog(account.id, pos)}><Pencil className="w-3 h-3" /></Button>
                                   <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" onClick={() => handleDeletePosition(pos.id)}><Trash2 className="w-3 h-3" /></Button>
@@ -1666,7 +1734,15 @@ export default function StocksPage() {
                     <span className="text-[10px] text-muted-foreground/50">--</span>
                   )}
                   {stock.agents && stock.agents.length > 0 && (
-                    <Badge variant="secondary" className="text-[10px]">{stock.agents.length} Agent</Badge>
+                    <>
+                      <Badge variant="secondary" className="text-[10px]">{stock.agents.length} Agent</Badge>
+                      {runningAgents[stock.id] && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+                          <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+                          {agents.find(a => a.name === runningAgents[stock.id])?.display_name || runningAgents[stock.id]}
+                        </span>
+                      )}
+                    </>
                   )}
                   <Button
                     variant="ghost"

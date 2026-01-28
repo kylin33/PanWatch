@@ -727,13 +727,15 @@ export default function DashboardPage() {
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-[13px] font-semibold text-foreground">{stock.symbol}</span>
                       <span className="text-[12px] text-muted-foreground">{stock.name}</span>
-                      <button
-                        onClick={() => openKlineDialog(stock.symbol, stock.market, stock.name, stock.has_position)}
-                        className="p-1 rounded hover:bg-accent/50 transition-colors"
-                        title="K线指标"
-                      >
-                        <BarChart3 className="w-4 h-4 text-muted-foreground" />
-                      </button>
+                      {!(suggestion || stock.kline) && (
+                        <button
+                          onClick={() => openKlineDialog(stock.symbol, stock.market, stock.name, stock.has_position)}
+                          className="p-1 rounded hover:bg-accent/50 transition-colors"
+                          title="K线指标"
+                        >
+                          <BarChart3 className="w-4 h-4 text-muted-foreground" />
+                        </button>
+                      )}
                       {stock.alert_type && (
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                           stock.alert_type === '急涨' ? 'bg-rose-500/10 text-rose-500' : 'bg-emerald-500/10 text-emerald-500'
@@ -797,6 +799,7 @@ export default function DashboardPage() {
                       stockSymbol={stock.symbol}
                       kline={stock.kline}
                       showFullInline={true}
+                      hasPosition={stock.has_position}
                     />
                   ) : enableAIAnalysis ? (
                     <div className="pt-3 border-t border-border/30">

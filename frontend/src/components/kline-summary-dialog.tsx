@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchAPI } from '@/lib/utils'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { buildKlineSuggestion } from '@/lib/kline-scorer'
 import { HoverPopover } from '@/components/ui/hover-popover'
 
 export interface KlineSummaryData {
@@ -56,6 +57,7 @@ interface KlineSummaryDialogProps {
   market: string
   stockName?: string
   hasPosition?: boolean
+  initialSummary?: KlineSummaryData | null
 }
 
 export function KlineSummaryDialog({
@@ -65,6 +67,7 @@ export function KlineSummaryDialog({
   market,
   stockName,
   hasPosition,
+  initialSummary = null,
 }: KlineSummaryDialogProps) {
   const [loading, setLoading] = useState(false)
   const [summary, setSummary] = useState<KlineSummaryData | null>(null)
@@ -103,125 +106,49 @@ export function KlineSummaryDialog({
   }
 
   const buildSuggestion = (s: KlineSummaryData, holding?: boolean) => {
-    let score = 0
+    const scored = buildKlineSuggestion(s, holding)
     const items: Array<{ text: string; delta: number }> = []
-    const tags: string[] = []
+    let localScore = 0
 
-    const addItem = (text: string, delta: number = 0, tag?: string) => {
-      items.push({ text, delta })
-      score += delta
-      if (tag) tags.push(tag)
-    }
+    const add = (text: string, delta: number) => { items.push({ text, delta }); localScore += delta }
 
-    // Trend
-    if (s.trend?.includes('多头')) {
-      addItem('均线多头排列，趋势偏强', 2, '多头')
-    } else if (s.trend?.includes('空头')) {
-      addItem('均线空头排列，趋势偏弱', -2, '空头')
-    } else if (s.trend?.includes('交织')) {
-      addItem('均线交织，趋势不明', 0)
-    }
+    if (s.trend?.includes('多头')) add('均线多头排列，趋势偏强', 2)
+    else if (s.trend?.includes('空头')) add('均线空头排列，趋势偏弱', -2)
 
-    // MACD
-    if (s.macd_status?.includes('金叉')) {
-      addItem('MACD 金叉，短线动能偏强', 2, 'MACD金叉')
-    }
-    if (s.macd_status?.includes('死叉')) {
-      addItem('MACD 死叉，短线动能转弱', -2, 'MACD死叉')
-    }
-    if (s.macd_hist != null) {
-      if (s.macd_hist > 0.0) {
-        addItem('MACD 柱体为正（动能偏多）', 1)
-      } else if (s.macd_hist < 0.0) {
-        addItem('MACD 柱体为负（动能偏空）', -1)
-      }
-    }
+    if (s.macd_status?.includes('金叉')) add('MACD 金叉，短线动能偏强', 2)
+    if (s.macd_status?.includes('死叉')) add('MACD 死叉，短线动能转弱', -2)
+    if (typeof s.macd_hist === 'number') add(`MACD 柱体${s.macd_hist > 0 ? '为正' : s.macd_hist < 0 ? '为负' : '接近0'}`, s.macd_hist > 0 ? 1 : s.macd_hist < 0 ? -1 : 0)
 
-    // RSI
-    if (s.rsi_status?.includes('超卖')) {
-      addItem('RSI 超卖，可能存在反弹', 1, 'RSI超卖')
-    } else if (s.rsi_status?.includes('偏强')) {
-      addItem('RSI 偏强，买盘占优', 1, 'RSI偏强')
-    } else if (s.rsi_status?.includes('超买')) {
-      addItem('RSI 超买，注意回调风险', -1, 'RSI超买')
-    } else if (s.rsi_status?.includes('偏弱')) {
-      addItem('RSI 偏弱，短线承压', -1, 'RSI偏弱')
-    } else if (s.rsi_status?.includes('中性')) {
-      addItem('RSI 中性', 0)
-    }
+    if (s.rsi_status?.includes('超卖')) add('RSI 超卖，可能存在反弹', 1)
+    else if (s.rsi_status?.includes('偏强')) add('RSI 偏强，买盘占优', 1)
+    else if (s.rsi_status?.includes('超买')) add('RSI 超买，注意回调风险', -1)
+    else if (s.rsi_status?.includes('偏弱')) add('RSI 偏弱，短线承压', -1)
 
-    // KDJ
-    if (s.kdj_status?.includes('金叉')) {
-      addItem('KDJ 金叉，短线转强', 1, 'KDJ金叉')
-    }
-    if (s.kdj_status?.includes('死叉')) {
-      addItem('KDJ 死叉，短线转弱', -1, 'KDJ死叉')
-    }
-    if (s.kdj_status?.includes('超买')) {
-      addItem('KDJ 超买（可能过热；强趋势中可能钝化）', 0)
-    }
-    if (s.kdj_status?.includes('超卖')) {
-      addItem('KDJ 超卖（可能超跌；弱趋势中可能钝化）', 0)
-    }
+    if (s.kdj_status?.includes('金叉')) add('KDJ 金叉，短线转强', 1)
+    if (s.kdj_status?.includes('死叉')) add('KDJ 死叉，短线转弱', -1)
 
-    // BOLL
-    if (s.boll_status?.includes('突破上轨')) {
-      addItem('突破布林上轨，趋势强势', 1, '突破上轨')
-    } else if (s.boll_status?.includes('跌破下轨')) {
-      addItem('跌破布林下轨，走势偏弱', -1, '跌破下轨')
-    } else if (s.boll_status) {
-      addItem(`布林：${s.boll_status}`, 0)
-    }
+    if (s.boll_status?.includes('突破上轨')) add('突破布林上轨，趋势强势', 1)
+    else if (s.boll_status?.includes('跌破下轨')) add('跌破布林下轨，走势偏弱', -1)
 
-    // Volume
-    if (s.volume_trend?.includes('放量')) {
-      addItem('放量配合，资金参与度提升', 1, '放量')
-    } else if (s.volume_trend?.includes('缩量')) {
-      addItem('缩量，动能不足', -1, '缩量')
-    } else if (s.volume_trend) {
-      addItem(`量能：${s.volume_trend}`, 0)
-    }
+    if (s.volume_trend?.includes('放量')) add('放量配合，资金参与度提升', 1)
+    else if (s.volume_trend?.includes('缩量')) add('缩量，动能不足', -1)
 
-    // Support / Resistance proximity (if last_close is present)
-    if (s.last_close != null && s.support != null && s.support > 0) {
-      if (s.last_close <= s.support * 1.02) {
-        addItem('价格接近支撑位，止跌反弹概率提升', 1, '靠近支撑')
-      }
-    }
-    if (s.last_close != null && s.resistance != null && s.resistance > 0) {
-      if (s.last_close >= s.resistance * 0.98) {
-        addItem('价格接近压力位，上行空间受限', -1, '靠近压力')
-      }
-    }
+    if (s.last_close != null && s.support != null && s.support > 0 && s.last_close <= s.support * 1.02) add('价格接近支撑位，止跌反弹概率提升', 1)
+    if (s.last_close != null && s.resistance != null && s.resistance > 0 && s.last_close >= s.resistance * 0.98) add('价格接近压力位，上行空间受限', -1)
 
-    const holdingFlag = holding === true
-    let action: Action
-    if (holdingFlag) {
-      if (score >= 3) action = 'add'
-      else if (score >= 1) action = 'hold'
-      else if (score <= -3) action = 'sell'
-      else if (score <= -1) action = 'reduce'
-      else action = 'watch'
-    } else {
-      if (score >= 3) action = 'buy'
-      else if (score <= -2) action = 'avoid'
-      else action = 'watch'
-    }
-
-    const uniqTags = Array.from(new Set(tags))
-    const signal = uniqTags.length > 0 ? uniqTags.join(' / ') : '技术面中性'
-
-    return {
-      action,
-      action_label: actionLabel(action),
-      signal,
-      score,
-      items,
-    }
+    return { ...scored, score: localScore, items }
   }
 
   useEffect(() => {
     if (!open || !symbol) return
+
+    // If we already have preloaded summary, use it without refetch
+    if (initialSummary) {
+      setSummary(initialSummary)
+      setError(null)
+      setLoading(false)
+      return
+    }
 
     setLoading(true)
     setError(null)
@@ -232,9 +159,10 @@ export function KlineSummaryDialog({
       .then((data) => setSummary(data.summary || null))
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
-  }, [open, symbol, market])
+  }, [open, symbol, market, initialSummary])
 
-  const suggestion = summary ? buildSuggestion(summary, hasPosition) : null
+  const effectiveSummary = initialSummary || summary
+  const suggestion = effectiveSummary ? buildSuggestion(effectiveSummary, hasPosition) : null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -246,11 +174,11 @@ export function KlineSummaryDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {loading ? (
+        {!initialSummary && loading ? (
           <div className="text-[12px] text-muted-foreground">加载中...</div>
         ) : error ? (
           <div className="text-[12px] text-rose-500">{error}</div>
-        ) : !summary ? (
+        ) : !effectiveSummary ? (
           <div className="text-[12px] text-muted-foreground">暂无数据</div>
         ) : (
           <div className="space-y-3">
@@ -298,7 +226,7 @@ export function KlineSummaryDialog({
             </div>
 
             <div className="flex flex-wrap gap-2 text-[11px]">
-              {summary.trend && (
+              {effectiveSummary.trend && (
                 <HoverPopover
                   title="趋势（均线排列）"
                   content={
@@ -315,10 +243,10 @@ export function KlineSummaryDialog({
                           <li><span className="font-medium text-foreground">均线交织</span>：震荡/换手期，信号更依赖成交量与关键价位。</li>
                         </ul>
                       </div>
-                      <div className="text-[10px] text-muted-foreground/70">当前：{summary.trend}</div>
-                      {(summary.ma5 != null || summary.ma10 != null || summary.ma20 != null || summary.ma60 != null) && (
+                      <div className="text-[10px] text-muted-foreground/70">当前：{effectiveSummary.trend}</div>
+                      {(effectiveSummary.ma5 != null || effectiveSummary.ma10 != null || effectiveSummary.ma20 != null || effectiveSummary.ma60 != null) && (
                         <div className="text-[10px] text-muted-foreground/70">
-                          均线：MA5≈{summary.ma5 != null ? summary.ma5.toFixed(2) : '—'}；MA10≈{summary.ma10 != null ? summary.ma10.toFixed(2) : '—'}；MA20≈{summary.ma20 != null ? summary.ma20.toFixed(2) : '—'}；MA60≈{summary.ma60 != null ? summary.ma60.toFixed(2) : '—'}
+                          均线：MA5≈{effectiveSummary.ma5 != null ? effectiveSummary.ma5.toFixed(2) : '—'}；MA10≈{effectiveSummary.ma10 != null ? effectiveSummary.ma10.toFixed(2) : '—'}；MA20≈{effectiveSummary.ma20 != null ? effectiveSummary.ma20.toFixed(2) : '—'}；MA60≈{effectiveSummary.ma60 != null ? effectiveSummary.ma60.toFixed(2) : '—'}
                         </div>
                       )}
                       <div className="text-[10px] text-muted-foreground/70">
@@ -328,13 +256,13 @@ export function KlineSummaryDialog({
                   }
                   trigger={
                     <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground cursor-help hover:bg-accent/70">
-                      {summary.trend}
+                      {effectiveSummary.trend}
                     </span>
                   }
                 />
               )}
 
-              {summary.macd_status && (
+              {effectiveSummary.macd_status && (
                 <HoverPopover
                   title="MACD（趋势/动能）"
                   content={
@@ -352,7 +280,7 @@ export function KlineSummaryDialog({
                         </ul>
                       </div>
                       <div className="text-[10px] text-muted-foreground/70">
-                        当前：{summary.macd_status}{summary.macd_hist != null ? `，柱体${summary.macd_hist > 0 ? '为正' : summary.macd_hist < 0 ? '为负' : '接近0'} (hist≈${summary.macd_hist.toFixed(3)})` : ''}
+                        当前：{effectiveSummary.macd_status}{effectiveSummary.macd_hist != null ? `，柱体${effectiveSummary.macd_hist > 0 ? '为正' : effectiveSummary.macd_hist < 0 ? '为负' : '接近0'} (hist≈${effectiveSummary.macd_hist.toFixed(3)})` : ''}
                       </div>
                       <div className="text-[10px] text-muted-foreground/70">
                         注意：MACD 在震荡区间容易频繁“假交叉”，通常需要结合趋势（均线）与量价确认。
@@ -361,13 +289,13 @@ export function KlineSummaryDialog({
                   }
                   trigger={
                     <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground cursor-help hover:bg-accent/70">
-                      MACD {summary.macd_status}
+                      MACD {effectiveSummary.macd_status}
                     </span>
                   }
                 />
               )}
 
-              {summary.rsi_status && (
+              {effectiveSummary.rsi_status && (
                 <HoverPopover
                   title="RSI（相对强弱）"
                   content={
@@ -386,7 +314,7 @@ export function KlineSummaryDialog({
                         </ul>
                       </div>
                       <div className="text-[10px] text-muted-foreground/70">
-                        当前：{summary.rsi_status}{summary.rsi6 != null ? `，RSI6≈${summary.rsi6.toFixed(0)}` : ''}
+                        当前：{effectiveSummary.rsi_status}{effectiveSummary.rsi6 != null ? `，RSI6≈${effectiveSummary.rsi6.toFixed(0)}` : ''}
                       </div>
                       <div className="text-[10px] text-muted-foreground/70">
                         注意：超买不等于立刻下跌、超卖不等于立刻反弹；更可靠的用法是结合趋势和关键位看“背离/衰竭”。
@@ -395,13 +323,13 @@ export function KlineSummaryDialog({
                   }
                   trigger={
                     <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground cursor-help hover:bg-accent/70">
-                      RSI {summary.rsi_status}{summary.rsi6 != null && ` (${summary.rsi6.toFixed(0)})`}
+                      RSI {effectiveSummary.rsi_status}{effectiveSummary.rsi6 != null && ` (${effectiveSummary.rsi6.toFixed(0)})`}
                     </span>
                   }
                 />
               )}
 
-              {summary.kdj_status && (
+              {effectiveSummary?.kdj_status && (
                 <HoverPopover
                   title="KDJ（随机指标）"
                   content={
@@ -419,12 +347,12 @@ export function KlineSummaryDialog({
                         </ul>
                       </div>
                       <div className="text-[10px] text-muted-foreground/70 space-y-1">
-                        <div>当前：{summary.kdj_status}</div>
-                        {(summary.kdj_k != null || summary.kdj_d != null || summary.kdj_j != null) && (
+                        <div>当前：{effectiveSummary.kdj_status}</div>
+                        {(effectiveSummary.kdj_k != null || effectiveSummary.kdj_d != null || effectiveSummary.kdj_j != null) && (
                           <div>
-                            K≈{summary.kdj_k != null ? summary.kdj_k.toFixed(1) : '—'}{' '}
-                            D≈{summary.kdj_d != null ? summary.kdj_d.toFixed(1) : '—'}{' '}
-                            J≈{summary.kdj_j != null ? summary.kdj_j.toFixed(1) : '—'}
+                            K≈{effectiveSummary.kdj_k != null ? effectiveSummary.kdj_k.toFixed(1) : '—'}{' '}
+                            D≈{effectiveSummary.kdj_d != null ? effectiveSummary.kdj_d.toFixed(1) : '—'}{' '}
+                            J≈{effectiveSummary.kdj_j != null ? effectiveSummary.kdj_j.toFixed(1) : '—'}
                           </div>
                         )}
                       </div>
@@ -435,13 +363,13 @@ export function KlineSummaryDialog({
                   }
                   trigger={
                     <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground cursor-help hover:bg-accent/70">
-                      KDJ {summary.kdj_status}
+                      KDJ {effectiveSummary.kdj_status}
                     </span>
                   }
                 />
               )}
 
-              {summary.volume_trend && (
+              {effectiveSummary?.volume_trend && (
                 <HoverPopover
                   title="量能（放量/缩量）"
                   content={
@@ -458,7 +386,7 @@ export function KlineSummaryDialog({
                         </ul>
                       </div>
                       <div className="text-[10px] text-muted-foreground/70">
-                        当前：{summary.volume_trend}{summary.volume_ratio != null ? `，量比≈${summary.volume_ratio.toFixed(1)}x` : ''}
+                        当前：{effectiveSummary.volume_trend}{effectiveSummary.volume_ratio != null ? `，量比≈${effectiveSummary.volume_ratio.toFixed(1)}x` : ''}
                       </div>
                       <div className="text-[10px] text-muted-foreground/70">
                         注意：量能的意义需要结合价格方向（价涨量增/价涨量缩/价跌量增/价跌量缩）综合判断。
@@ -467,13 +395,13 @@ export function KlineSummaryDialog({
                   }
                   trigger={
                     <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground cursor-help hover:bg-accent/70">
-                      {summary.volume_trend}{summary.volume_ratio != null && ` (${summary.volume_ratio.toFixed(1)}x)`}
+                      {effectiveSummary.volume_trend}{effectiveSummary.volume_ratio != null && ` (${effectiveSummary.volume_ratio.toFixed(1)}x)`}
                     </span>
                   }
                 />
               )}
 
-              {summary.boll_status && (
+              {effectiveSummary?.boll_status && (
                 <HoverPopover
                   title="布林带（波动/通道）"
                   content={
@@ -500,11 +428,11 @@ export function KlineSummaryDialog({
                       </div>
                       <div className="text-[10px] text-muted-foreground/70 space-y-1">
                         <div>
-                          当前：{summary.boll_status}{summary.boll_width != null ? `，带宽≈${summary.boll_width.toFixed(1)}%` : ''}
+                          当前：{effectiveSummary.boll_status}{effectiveSummary.boll_width != null ? `，带宽≈${effectiveSummary.boll_width.toFixed(1)}%` : ''}
                         </div>
-                        {(summary.boll_upper != null || summary.boll_mid != null || summary.boll_lower != null) && (
+                        {(effectiveSummary.boll_upper != null || effectiveSummary.boll_mid != null || effectiveSummary.boll_lower != null) && (
                           <div>
-                            上轨≈{summary.boll_upper != null ? summary.boll_upper.toFixed(2) : '—'}；中轨≈{summary.boll_mid != null ? summary.boll_mid.toFixed(2) : '—'}；下轨≈{summary.boll_lower != null ? summary.boll_lower.toFixed(2) : '—'}
+                            上轨≈{effectiveSummary.boll_upper != null ? effectiveSummary.boll_upper.toFixed(2) : '—'}；中轨≈{effectiveSummary.boll_mid != null ? effectiveSummary.boll_mid.toFixed(2) : '—'}；下轨≈{effectiveSummary.boll_lower != null ? effectiveSummary.boll_lower.toFixed(2) : '—'}
                           </div>
                         )}
                       </div>
@@ -512,13 +440,13 @@ export function KlineSummaryDialog({
                   }
                   trigger={
                     <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground cursor-help hover:bg-accent/70">
-                      布林 {summary.boll_status}
+                      布林 {effectiveSummary.boll_status}
                     </span>
                   }
                 />
               )}
 
-              {summary.kline_pattern && (
+              {effectiveSummary?.kline_pattern && (
                 <HoverPopover
                   title="K线形态（局部结构）"
                   content={
@@ -531,7 +459,7 @@ export function KlineSummaryDialog({
                         <span className="font-medium text-foreground">代表什么：</span>
                         多数形态需要结合趋势、量能与关键位确认。比如锤子线出现在下跌末端更有意义；吞没形态更看重“前后两根K线对比”。
                       </div>
-                      <div className="text-[10px] text-muted-foreground/70">当前：{summary.kline_pattern}</div>
+                      <div className="text-[10px] text-muted-foreground/70">当前：{effectiveSummary.kline_pattern}</div>
                       <div className="text-[10px] text-muted-foreground/70">
                         注意：单根K线形态误判率较高，建议仅作提示，不建议孤立决策。
                       </div>
@@ -539,7 +467,7 @@ export function KlineSummaryDialog({
                   }
                   trigger={
                     <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-600 cursor-help hover:bg-amber-500/15">
-                      {summary.kline_pattern}
+                      {effectiveSummary.kline_pattern}
                     </span>
                   }
                 />
@@ -547,7 +475,7 @@ export function KlineSummaryDialog({
             </div>
 
             <div className="flex flex-wrap gap-2 text-[11px]">
-              {summary.support != null && (
+              {effectiveSummary && effectiveSummary.support != null && (
                 <HoverPopover
                   title="支撑位（关键支撑区）"
                   content={
@@ -569,17 +497,17 @@ export function KlineSummaryDialog({
                         </ul>
                       </div>
                       <div className="text-[10px] text-muted-foreground/70 space-y-1">
-                        <div>当前：支撑≈{summary.support.toFixed(2)}</div>
-                        {summary.last_close != null && summary.support > 0 && (
+                        <div>当前：支撑≈{effectiveSummary.support.toFixed(2)}</div>
+                        {effectiveSummary.last_close != null && effectiveSummary.support > 0 && (
                           <div>
-                            距离（以收盘价计）≈{(((summary.last_close - summary.support) / summary.support) * 100).toFixed(2)}%
+                            距离（以收盘价计）≈{(((effectiveSummary.last_close - effectiveSummary.support) / effectiveSummary.support) * 100).toFixed(2)}%
                             {' '}
-                            {summary.last_close <= summary.support * 1.02 ? '（接近支撑，评分规则会加分）' : ''}
+                            {effectiveSummary.last_close <= effectiveSummary.support * 1.02 ? '（接近支撑，评分规则会加分）' : ''}
                           </div>
                         )}
-                        {(summary.support_s != null || summary.support_m != null || summary.support_l != null) && (
+                        {(effectiveSummary.support_s != null || effectiveSummary.support_m != null || effectiveSummary.support_l != null) && (
                           <div>
-                            多级别：短期(5日)≈{summary.support_s != null ? summary.support_s.toFixed(2) : '—'}；中期(20日)≈{summary.support_m != null ? summary.support_m.toFixed(2) : '—'}；长期(60日)≈{summary.support_l != null ? summary.support_l.toFixed(2) : '—'}
+                            多级别：短期(5日)≈{effectiveSummary.support_s != null ? effectiveSummary.support_s.toFixed(2) : '—'}；中期(20日)≈{effectiveSummary.support_m != null ? effectiveSummary.support_m.toFixed(2) : '—'}；长期(60日)≈{effectiveSummary.support_l != null ? effectiveSummary.support_l.toFixed(2) : '—'}
                           </div>
                         )}
                       </div>
@@ -590,12 +518,12 @@ export function KlineSummaryDialog({
                   }
                   trigger={
                     <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 cursor-help hover:bg-emerald-500/15">
-                      支撑 {summary.support.toFixed(2)}
-                    </span>
-                  }
-                />
+                      支撑 {effectiveSummary.support.toFixed(2)}
+                  </span>
+                }
+              />
               )}
-              {summary.resistance != null && (
+              {effectiveSummary && effectiveSummary.resistance != null && (
                 <HoverPopover
                   title="压力位（关键压力区）"
                   content={
@@ -617,17 +545,17 @@ export function KlineSummaryDialog({
                         </ul>
                       </div>
                       <div className="text-[10px] text-muted-foreground/70 space-y-1">
-                        <div>当前：压力≈{summary.resistance.toFixed(2)}</div>
-                        {summary.last_close != null && summary.resistance > 0 && (
+                        <div>当前：压力≈{effectiveSummary.resistance.toFixed(2)}</div>
+                        {effectiveSummary.last_close != null && effectiveSummary.resistance > 0 && (
                           <div>
-                            距离（以收盘价计）≈{(((summary.resistance - summary.last_close) / summary.resistance) * 100).toFixed(2)}%
+                            距离（以收盘价计）≈{(((effectiveSummary.resistance - effectiveSummary.last_close) / effectiveSummary.resistance) * 100).toFixed(2)}%
                             {' '}
-                            {summary.last_close >= summary.resistance * 0.98 ? '（接近压力，评分规则会扣分）' : ''}
+                            {effectiveSummary.last_close >= effectiveSummary.resistance * 0.98 ? '（接近压力，评分规则会扣分）' : ''}
                           </div>
                         )}
-                        {(summary.resistance_s != null || summary.resistance_m != null || summary.resistance_l != null) && (
+                        {(effectiveSummary.resistance_s != null || effectiveSummary.resistance_m != null || effectiveSummary.resistance_l != null) && (
                           <div>
-                            多级别：短期(5日)≈{summary.resistance_s != null ? summary.resistance_s.toFixed(2) : '—'}；中期(20日)≈{summary.resistance_m != null ? summary.resistance_m.toFixed(2) : '—'}；长期(60日)≈{summary.resistance_l != null ? summary.resistance_l.toFixed(2) : '—'}
+                            多级别：短期(5日)≈{effectiveSummary.resistance_s != null ? effectiveSummary.resistance_s.toFixed(2) : '—'}；中期(20日)≈{effectiveSummary.resistance_m != null ? effectiveSummary.resistance_m.toFixed(2) : '—'}；长期(60日)≈{effectiveSummary.resistance_l != null ? effectiveSummary.resistance_l.toFixed(2) : '—'}
                           </div>
                         )}
                       </div>
@@ -638,16 +566,16 @@ export function KlineSummaryDialog({
                   }
                   trigger={
                     <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-600 cursor-help hover:bg-rose-500/15">
-                      压力 {summary.resistance.toFixed(2)}
-                    </span>
-                  }
-                />
+                      压力 {effectiveSummary.resistance.toFixed(2)}
+                  </span>
+                }
+              />
               )}
             </div>
 
-            {(summary.change_5d != null || summary.change_20d != null || summary.amplitude != null) && (
+            {(effectiveSummary.change_5d != null || effectiveSummary.change_20d != null || effectiveSummary.amplitude != null) && (
               <div className="flex gap-4 text-[11px] text-muted-foreground">
-                {summary.change_5d != null && (
+                {effectiveSummary.change_5d != null && (
                   <HoverPopover
                     title="5日涨跌幅（短期动量）"
                     content={
@@ -669,21 +597,21 @@ export function KlineSummaryDialog({
                           </ul>
                         </div>
                         <div className="text-[10px] text-muted-foreground/70">
-                          当前：{summary.change_5d >= 0 ? '+' : ''}{summary.change_5d.toFixed(2)}%
+                          当前：{effectiveSummary.change_5d >= 0 ? '+' : ''}{effectiveSummary.change_5d.toFixed(2)}%
                         </div>
                       </div>
                     }
                     trigger={
                       <span className="cursor-help hover:text-foreground">
                         5日{' '}
-                        <span className={summary.change_5d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
-                          {summary.change_5d >= 0 ? '+' : ''}{summary.change_5d.toFixed(2)}%
+                        <span className={effectiveSummary.change_5d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
+                          {effectiveSummary.change_5d >= 0 ? '+' : ''}{effectiveSummary.change_5d.toFixed(2)}%
                         </span>
                       </span>
                     }
                   />
                 )}
-                {summary.change_20d != null && (
+                {effectiveSummary.change_20d != null && (
                   <HoverPopover
                     title="20日涨跌幅（波段/一月动量）"
                     content={
@@ -705,21 +633,21 @@ export function KlineSummaryDialog({
                           </ul>
                         </div>
                         <div className="text-[10px] text-muted-foreground/70">
-                          当前：{summary.change_20d >= 0 ? '+' : ''}{summary.change_20d.toFixed(2)}%
+                          当前：{effectiveSummary.change_20d >= 0 ? '+' : ''}{effectiveSummary.change_20d.toFixed(2)}%
                         </div>
                       </div>
                     }
                     trigger={
                       <span className="cursor-help hover:text-foreground">
                         20日{' '}
-                        <span className={summary.change_20d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
-                          {summary.change_20d >= 0 ? '+' : ''}{summary.change_20d.toFixed(2)}%
+                        <span className={effectiveSummary.change_20d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
+                          {effectiveSummary.change_20d >= 0 ? '+' : ''}{effectiveSummary.change_20d.toFixed(2)}%
                         </span>
                       </span>
                     }
                   />
                 )}
-                {summary.amplitude != null && (
+                {effectiveSummary.amplitude != null && (
                   <HoverPopover
                     title="振幅（波动强度）"
                     content={
@@ -741,16 +669,16 @@ export function KlineSummaryDialog({
                           </ul>
                         </div>
                         <div className="text-[10px] text-muted-foreground/70 space-y-1">
-                          <div>当前：{summary.amplitude.toFixed(2)}%</div>
-                          {summary.amplitude_avg5 != null && (
-                            <div>近5日均值：{summary.amplitude_avg5.toFixed(2)}%</div>
+                          <div>当前：{effectiveSummary.amplitude.toFixed(2)}%</div>
+                          {effectiveSummary.amplitude_avg5 != null && (
+                            <div>近5日均值：{effectiveSummary.amplitude_avg5.toFixed(2)}%</div>
                           )}
                         </div>
                       </div>
                     }
                     trigger={
                       <span className="cursor-help hover:text-foreground">
-                        振幅: {summary.amplitude.toFixed(2)}%
+                        振幅: {effectiveSummary.amplitude.toFixed(2)}%
                       </span>
                     }
                   />

@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { KlineSummaryDialog } from '@/components/kline-summary-dialog'
+import { KlineIndicators } from '@/components/kline-indicators'
+import { buildKlineSuggestion } from '@/lib/kline-scorer'
 
 export interface SuggestionInfo {
   action: string  // buy/add/reduce/sell/hold/watch
@@ -64,6 +67,8 @@ interface SuggestionBadgeProps {
   stockSymbol?: string
   kline?: KlineSummary | null
   showFullInline?: boolean  // 是否在行内显示完整信息（Dashboard 模式）
+  market?: string           // 市场（用于技术指标弹窗）
+  hasPosition?: boolean     // 是否持仓（用于技术指标弹窗）
 }
 
 const actionColors: Record<string, string> = {
@@ -78,6 +83,40 @@ const actionColors: Record<string, string> = {
   alert: 'bg-blue-500 text-white',  // 设置预警
   // 盘后日报
   avoid: 'bg-red-600 text-white',  // 暂时回避
+}
+
+const actionLabels: Record<string, string> = {
+  buy: '买入',
+  add: '加仓',
+  reduce: '减仓',
+  sell: '卖出',
+  hold: '持有',
+  watch: '观望',
+  avoid: '回避',
+}
+
+// 将各种同义中文/英文文案归一到统一的动作枚举，便于颜色和标签一致
+function normalizeAction(action?: string, label?: string): keyof typeof actionColors | null {
+  const raw = (action || label || '').toLowerCase()
+  if (!raw) return null
+  // 英文或枚举
+  if (raw === 'buy') return 'buy'
+  if (raw === 'add' || raw === 'increase') return 'add'
+  if (raw === 'reduce' || raw === 'decrease') return 'reduce'
+  if (raw === 'sell') return 'sell'
+  if (raw === 'hold') return 'hold'
+  if (raw === 'watch' || raw === 'neutral') return 'watch'
+  if (raw === 'avoid') return 'avoid'
+
+  // 中文同义
+  if (/买入|买|建仓/.test(raw)) return 'buy'
+  if (/加仓|增持|补仓/.test(raw)) return 'add'
+  if (/减仓|减持/.test(raw)) return 'reduce'
+  if (/清仓|卖出|止损|卖/.test(raw)) return 'sell'
+  if (/持有|持仓/.test(raw)) return 'hold'
+  if (/观望|中性|等待/.test(raw)) return 'watch'
+  if (/回避|规避|避免/.test(raw)) return 'avoid'
+  return null
 }
 
 // 格式化建议时间（自动转换为本地时区，只显示时:分）
@@ -121,37 +160,54 @@ export function SuggestionBadge({
   stockName,
   stockSymbol,
   kline,
-  showFullInline = false
+  showFullInline = false,
+  market = 'CN',
+  hasPosition = false,
 }: SuggestionBadgeProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [klineDialogOpen, setKlineDialogOpen] = useState(false)
 
   if (!suggestion && !kline) return null
 
   // Dashboard 模式：行内显示完整信息（仅建议 badge）
   if (showFullInline) {
     if (!suggestion) return null
-    const colorClass = actionColors[suggestion.action] || 'bg-slate-500 text-white'
+    const normalized = normalizeAction(suggestion.action, suggestion.action_label)
+    const colorClass = normalized ? (actionColors[normalized] || 'bg-slate-500 text-white') : 'bg-slate-500 text-white'
     const timeStr = formatSuggestionTime(suggestion.created_at)
+    const isAI = !!suggestion.agent_name && suggestion.agent_label !== '技术指标'
+    const aiLabel = normalized ? (actionLabels[normalized] || suggestion.action_label) : (suggestion.action_label || '观望')
+    const tech = kline ? buildKlineSuggestion(kline as any, hasPosition) : null
+    const techColor = tech ? (actionColors[tech.action] || 'bg-slate-500 text-white') : 'bg-slate-500 text-white'
     return (
       <>
         <div className="pt-3 border-t border-border/30">
           <div className="flex items-start gap-3">
-            <div className="shrink-0">
+            <div className="shrink-0 flex items-center gap-2">
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  setDialogOpen(true)
+                  if (suggestion.agent_label === '技术指标') setKlineDialogOpen(true)
+                  else setDialogOpen(true)
                 }}
-                className={`text-[11px] px-2 py-1 rounded font-medium hover:opacity-80 transition-opacity ${colorClass} ${suggestion.is_expired ? 'opacity-50' : ''}`}
-                title="点击查看详情"
+                className={`relative text-[13px] px-3 py-1.5 rounded font-medium hover:opacity-80 transition-opacity whitespace-nowrap ${colorClass} ${suggestion.is_expired ? 'opacity-50' : ''}`}
+                title="点击查看建议详情"
               >
-                {suggestion.action_label}
+                {aiLabel}
+                {isAI && (
+                  <span className="pointer-events-none absolute top-0 left-0 transform -translate-x-1/2 -translate-y-1/2 text-[10px] leading-none px-1.5 py-[2px] rounded-sm bg-primary text-white uppercase shadow-sm ring-1 ring-black/20">
+                    AI
+                  </span>
+                )}
               </button>
-              {/* 来源和时间 */}
-              {(suggestion.agent_label || timeStr) && (
-                <div className="text-[10px] text-muted-foreground/70 mt-1 text-center">
-                  {suggestion.agent_label}{suggestion.agent_label && timeStr && ' · '}{timeStr}
-                </div>
+              {isAI && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setKlineDialogOpen(true) }}
+                  className={`text-[13px] px-3 py-1.5 rounded font-medium hover:opacity-80 transition-opacity ${techColor}`}
+                  title="点击查看技术面详情"
+                >
+                  {tech ? tech.action_label : '观望'}
+                </button>
               )}
             </div>
             <div className="flex-1 min-w-0">
@@ -171,9 +227,15 @@ export function SuggestionBadge({
           <DialogContent className="max-w-md">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                <span className={`text-[12px] px-2 py-1 rounded font-medium ${colorClass}`}>
-                  {suggestion.action_label}
+                <span className={`relative inline-flex text-[13px] px-3 py-1.5 rounded font-medium whitespace-nowrap ${colorClass}`}>
+                  {aiLabel}
+                  {isAI && (
+                    <span className="pointer-events-none absolute top-0 left-0 transform -translate-x-1/2 -translate-y-1/2 text-[10px] leading-none px-1.5 py-[2px] rounded-sm bg-primary text-white uppercase shadow-sm ring-1 ring-black/20">
+                      AI
+                    </span>
+                  )}
                 </span>
+                {/* AI 标签已前置到按钮文案，不再重复 */}
                 {stockName && (
                   <span className="text-[14px] font-normal text-muted-foreground">
                     {stockName} {stockSymbol && `(${stockSymbol})`}
@@ -213,67 +275,7 @@ export function SuggestionBadge({
               {kline && (
                 <div className="space-y-3">
                   <div className="text-[11px] text-muted-foreground">技术指标</div>
-
-                  {/* 趋势与形态 */}
-                  <div className="flex flex-wrap gap-2 text-[11px]">
-                    <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                      {kline.trend}
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                      MACD {kline.macd_status}
-                    </span>
-                    {kline.rsi_status && (
-                      <span className={`px-2 py-0.5 rounded ${
-                        kline.rsi_status === '超买' ? 'bg-rose-500/10 text-rose-600' :
-                        kline.rsi_status === '超卖' ? 'bg-emerald-500/10 text-emerald-600' :
-                        'bg-accent/50 text-muted-foreground'
-                      }`}>
-                        RSI {kline.rsi_status}{kline.rsi6 != null && ` (${kline.rsi6.toFixed(0)})`}
-                      </span>
-                    )}
-                    {kline.kdj_status && (
-                      <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                        KDJ {kline.kdj_status}
-                      </span>
-                    )}
-                    {kline.volume_trend && (
-                      <span className={`px-2 py-0.5 rounded ${
-                        kline.volume_trend === '放量' ? 'bg-amber-500/10 text-amber-600' :
-                        kline.volume_trend === '缩量' ? 'bg-blue-500/10 text-blue-600' :
-                        'bg-accent/50 text-muted-foreground'
-                      }`}>
-                        {kline.volume_trend}{kline.volume_ratio != null && ` (${kline.volume_ratio.toFixed(1)}x)`}
-                      </span>
-                    )}
-                    {kline.boll_status && (
-                      <span className={`px-2 py-0.5 rounded ${
-                        kline.boll_status === '突破上轨' ? 'bg-rose-500/10 text-rose-600' :
-                        kline.boll_status === '跌破下轨' ? 'bg-emerald-500/10 text-emerald-600' :
-                        'bg-accent/50 text-muted-foreground'
-                      }`}>
-                        布林 {kline.boll_status}
-                      </span>
-                    )}
-                    {kline.kline_pattern && (
-                      <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-600">
-                        {kline.kline_pattern}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* 支撑压力 */}
-                  <div className="flex flex-wrap gap-2 text-[11px]">
-                    {kline.support && (
-                      <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600">
-                        支撑 {kline.support.toFixed(2)}
-                      </span>
-                    )}
-                    {kline.resistance && (
-                      <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-600">
-                        压力 {kline.resistance.toFixed(2)}
-                      </span>
-                    )}
-                  </div>
+                  <KlineIndicators summary={kline as any} />
                 </div>
               )}
 
@@ -301,6 +303,15 @@ export function SuggestionBadge({
             </div>
           </DialogContent>
         </Dialog>
+        <KlineSummaryDialog
+          open={klineDialogOpen}
+          onOpenChange={setKlineDialogOpen}
+          symbol={stockSymbol || ''}
+          market={market}
+          stockName={stockName}
+          hasPosition={hasPosition}
+          initialSummary={kline as any}
+        />
       </>
     )
   }
@@ -313,7 +324,7 @@ export function SuggestionBadge({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              setDialogOpen(true)
+              setKlineDialogOpen(true)
             }}
             className="text-[10px] px-1.5 py-0.5 rounded font-medium cursor-pointer hover:opacity-80 transition-opacity bg-accent/50 text-muted-foreground"
             title="点击查看技术指标"
@@ -322,108 +333,71 @@ export function SuggestionBadge({
           </button>
         </div>
 
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <span className="text-[12px] px-2 py-1 rounded font-medium bg-accent/50 text-muted-foreground">
-                  技术指标
-                </span>
-                {stockName && (
-                  <span className="text-[14px] font-normal text-muted-foreground">
-                    {stockName} {stockSymbol && `(${stockSymbol})`}
-                  </span>
-                )}
-              </DialogTitle>
-            </DialogHeader>
-
-            {/* 技术指标 */}
-            <div className="space-y-3">
-              <div className="text-[11px] text-muted-foreground">技术指标</div>
-
-              <div className="flex flex-wrap gap-2 text-[11px]">
-                {kline.trend && (
-                  <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                    {kline.trend}
-                  </span>
-                )}
-                {kline.macd_status && (
-                  <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                    MACD {kline.macd_status}
-                  </span>
-                )}
-                {kline.rsi_status && (
-                  <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                    RSI {kline.rsi_status}{kline.rsi6 != null && ` (${kline.rsi6.toFixed(0)})`}
-                  </span>
-                )}
-                {kline.kdj_status && (
-                  <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                    KDJ {kline.kdj_status}
-                  </span>
-                )}
-                {kline.volume_trend && (
-                  <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                    {kline.volume_trend}{kline.volume_ratio != null && ` (${kline.volume_ratio.toFixed(1)}x)`}
-                  </span>
-                )}
-                {kline.boll_status && (
-                  <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                    布林 {kline.boll_status}
-                  </span>
-                )}
-                {kline.kline_pattern && (
-                  <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-600">
-                    {kline.kline_pattern}
-                  </span>
-                )}
-              </div>
-
-              <div className="flex flex-wrap gap-2 text-[11px]">
-                {kline.support && (
-                  <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600">
-                    支撑 {kline.support.toFixed(2)}
-                  </span>
-                )}
-                {kline.resistance && (
-                  <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-600">
-                    压力 {kline.resistance.toFixed(2)}
-                  </span>
-                )}
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+        <KlineSummaryDialog
+          open={klineDialogOpen}
+          onOpenChange={setKlineDialogOpen}
+          symbol={stockSymbol || ''}
+          market={market || 'CN'}
+          stockName={stockName}
+          hasPosition={hasPosition}
+          initialSummary={kline as any}
+        />
       </>
     )
   }
 
-  const colorClass = actionColors[suggestion.action] || 'bg-slate-500 text-white'
+  const normalized = normalizeAction(suggestion.action, suggestion.action_label)
+  const colorClass = normalized ? (actionColors[normalized] || 'bg-slate-500 text-white') : 'bg-slate-500 text-white'
+  const displayLabel = normalized ? (actionLabels[normalized] || suggestion.action_label) : (suggestion.action_label || '观望')
+  const isAI = !!suggestion.agent_name && suggestion.agent_label !== '技术指标'
 
   // 持仓页模式：小徽章 + 点击弹窗
   const timeStr = formatSuggestionTime(suggestion.created_at)
-  const sourceInfo = suggestion.agent_label
-    ? `${suggestion.agent_label}${timeStr ? ` · ${timeStr}` : ''}`
-    : ''
+  const sourceInfo = ''
 
   return (
     <>
       <div className="inline-flex flex-col items-start gap-0.5">
+        <div className="inline-flex items-center gap-1">
         <button
           onClick={(e) => {
             e.stopPropagation()
-            setDialogOpen(true)
+            if (suggestion.agent_label === '技术指标') setKlineDialogOpen(true)
+            else setDialogOpen(true)
           }}
-          className={`text-[10px] px-1.5 py-0.5 rounded font-medium cursor-pointer hover:opacity-80 transition-opacity ${colorClass} ${suggestion.is_expired ? 'opacity-50' : ''}`}
-          title={sourceInfo ? `${sourceInfo} - 点击查看详情` : '点击查看 AI 建议详情'}
+          className={`relative text-[12px] px-2.5 py-1 rounded font-medium cursor-pointer hover:opacity-80 transition-opacity whitespace-nowrap ${colorClass} ${suggestion.is_expired ? 'opacity-50' : ''}`}
+          title={sourceInfo ? `${sourceInfo} - 点击查看详情` : '点击查看建议详情'}
         >
-          {suggestion.action_label}
+          {displayLabel}
+          {isAI && (
+            <span className="pointer-events-none absolute top-0 left-0 transform -translate-x-1/2 -translate-y-1/2 text-[10px] leading-none px-1.5 py-[2px] rounded-sm bg-primary text-white uppercase shadow-sm ring-1 ring-black/20">
+              AI
+            </span>
+          )}
         </button>
-        {/* 来源和时间（显示在徽章下方） */}
-        {sourceInfo && (
-          <span className="text-[9px] text-muted-foreground/60">
-            {sourceInfo}
-          </span>
+        {suggestion.agent_label !== '技术指标' && (
+          (() => {
+            const tech = kline ? buildKlineSuggestion(kline as any, hasPosition) : null
+            const techColor = tech ? (actionColors[tech.action] || 'bg-slate-500 text-white') : 'bg-slate-500 text-white'
+            const label = tech ? tech.action_label : '观望'
+            return (
+              <button
+                onClick={(e) => { e.stopPropagation(); setKlineDialogOpen(true) }}
+                className={`text-[12px] px-2.5 py-1 rounded font-medium cursor-pointer hover:opacity-80 transition-opacity ${techColor}`}
+                title="点击查看技术面详情"
+              >
+                {label}
+              </button>
+            )
+          })()
+        )}
+        </div>
+        {/* 来源和时间（显示在徽章下方，仅 AI 建议以增强区分）*/}
+        {isAI && (
+          <div className="mt-1 text-[10px] text-muted-foreground/70">
+            来源: {suggestion.agent_label || 'AI'}{timeStr && ` · ${timeStr}`}
+            {suggestion.is_expired && <span className="ml-1 text-amber-600">(已过期)</span>}
+          </div>
         )}
       </div>
 
@@ -473,90 +447,7 @@ export function SuggestionBadge({
             {kline && (
               <div className="space-y-3">
                 <div className="text-[11px] text-muted-foreground">技术指标</div>
-
-                {/* 趋势与形态 */}
-                <div className="flex flex-wrap gap-2 text-[11px]">
-                  <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                    {kline.trend}
-                  </span>
-                  <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                    MACD {kline.macd_status}
-                  </span>
-                  {kline.rsi_status && (
-                    <span className={`px-2 py-0.5 rounded ${
-                      kline.rsi_status === '超买' ? 'bg-rose-500/10 text-rose-600' :
-                      kline.rsi_status === '超卖' ? 'bg-emerald-500/10 text-emerald-600' :
-                      'bg-accent/50 text-muted-foreground'
-                    }`}>
-                      RSI {kline.rsi_status}{kline.rsi6 != null && ` (${kline.rsi6.toFixed(0)})`}
-                    </span>
-                  )}
-                  {kline.kdj_status && (
-                    <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                      KDJ {kline.kdj_status}
-                    </span>
-                  )}
-                  {kline.volume_trend && (
-                    <span className={`px-2 py-0.5 rounded ${
-                      kline.volume_trend === '放量' ? 'bg-amber-500/10 text-amber-600' :
-                      kline.volume_trend === '缩量' ? 'bg-blue-500/10 text-blue-600' :
-                      'bg-accent/50 text-muted-foreground'
-                    }`}>
-                      {kline.volume_trend}{kline.volume_ratio != null && ` (${kline.volume_ratio.toFixed(1)}x)`}
-                    </span>
-                  )}
-                  {kline.boll_status && (
-                    <span className={`px-2 py-0.5 rounded ${
-                      kline.boll_status === '突破上轨' ? 'bg-rose-500/10 text-rose-600' :
-                      kline.boll_status === '跌破下轨' ? 'bg-emerald-500/10 text-emerald-600' :
-                      'bg-accent/50 text-muted-foreground'
-                    }`}>
-                      布林 {kline.boll_status}
-                    </span>
-                  )}
-                  {kline.kline_pattern && (
-                    <span className={`px-2 py-0.5 rounded ${
-                      kline.kline_pattern.includes('阳') || kline.kline_pattern.includes('涨') ? 'bg-rose-500/10 text-rose-600' :
-                      kline.kline_pattern.includes('阴') || kline.kline_pattern.includes('跌') ? 'bg-emerald-500/10 text-emerald-600' :
-                      'bg-amber-500/10 text-amber-600'
-                    }`}>
-                      {kline.kline_pattern}
-                    </span>
-                  )}
-                </div>
-
-                {/* 支撑压力 */}
-                <div className="flex flex-wrap gap-2 text-[11px]">
-                  {kline.support && (
-                    <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600">
-                      支撑 {kline.support.toFixed(2)}
-                    </span>
-                  )}
-                  {kline.resistance && (
-                    <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-600">
-                      压力 {kline.resistance.toFixed(2)}
-                    </span>
-                  )}
-                </div>
-
-                {/* 涨跌幅 */}
-                {(kline.change_5d !== null || kline.change_20d !== null) && (
-                  <div className="flex gap-4 text-[11px] text-muted-foreground">
-                    {kline.change_5d !== null && (
-                      <span>5日: <span className={kline.change_5d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
-                        {kline.change_5d >= 0 ? '+' : ''}{kline.change_5d.toFixed(2)}%
-                      </span></span>
-                    )}
-                    {kline.change_20d !== null && (
-                      <span>20日: <span className={kline.change_20d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
-                        {kline.change_20d >= 0 ? '+' : ''}{kline.change_20d.toFixed(2)}%
-                      </span></span>
-                    )}
-                    {kline.amplitude != null && (
-                      <span>振幅: {kline.amplitude.toFixed(2)}%</span>
-                    )}
-                  </div>
-                )}
+                <KlineIndicators summary={kline as any} />
               </div>
             )}
 
@@ -584,6 +475,16 @@ export function SuggestionBadge({
           </div>
         </DialogContent>
       </Dialog>
+      {/* Always mount K-line dialog for technical details */}
+      <KlineSummaryDialog
+        open={klineDialogOpen}
+        onOpenChange={setKlineDialogOpen}
+        symbol={stockSymbol || ''}
+        market={market}
+        stockName={stockName}
+        hasPosition={hasPosition}
+        initialSummary={kline as any}
+      />
     </>
   )
 }
