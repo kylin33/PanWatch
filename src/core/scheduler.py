@@ -63,6 +63,9 @@ class AgentScheduler:
         parts = cron.split()
         if len(parts) != 5:
             raise ValueError(f"无效的 cron 表达式: {cron}")
+        minute_val = parts[0]
+        if minute_val == "*/60":
+            minute_val = "0" 
 
         return CronTrigger(
             minute=parts[0],
