@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from src.web.database import get_db
 from src.web.models import AppSettings
 from src.config import Settings
+from src.core.update_checker import check_update
 
 router = APIRouter()
 
@@ -113,3 +114,10 @@ def update_setting(key: str, update: SettingUpdate, db: Session = Depends(get_db
 def get_version():
     """获取应用版本号"""
     return {"version": get_app_version()}
+
+
+@router.get("/update-check")
+def get_update_check():
+    """检查是否有可用新版本（带服务端缓存）。"""
+    current = get_app_version()
+    return check_update(current)

@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom'
 import { Moon, Sun, TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard, LogOut } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
-import { isAuthenticated, logout } from '@/lib/utils'
+import { fetchAPI, isAuthenticated, logout } from '@/lib/utils'
 import DashboardPage from '@/pages/Dashboard'
 import StocksPage from '@/pages/Stocks'
 import StockDetailPage from '@/pages/StockDetail'
@@ -13,6 +13,8 @@ import HistoryPage from '@/pages/History'
 import LoginPage from '@/pages/Login'
 import LogsModal from '@/components/logs-modal'
 import AmbientBackground from '@/components/AmbientBackground'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -61,6 +63,9 @@ function App() {
   const location = useLocation()
   const [version, setVersion] = useState('')
   const [logsOpen, setLogsOpen] = useState(false)
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  const [upgradeInfo, setUpgradeInfo] = useState<{ latest: string; url: string } | null>(null)
+  const checkedUpdateRef = useRef(false)
 
   useEffect(() => {
     fetch(`${API_BASE}/api/version`)
@@ -68,6 +73,26 @@ function App() {
       .then(data => setVersion(data.data?.version || data.version || ''))
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (checkedUpdateRef.current) return
+    if (!isAuthenticated()) return
+    const current = String(version || '').trim()
+    if (!current || current === 'dev') return
+    checkedUpdateRef.current = true
+
+    fetchAPI<any>('/settings/update-check')
+      .then((res) => {
+        const latest = String(res?.latest_version || '').trim()
+        const shouldOpen = !!res?.update_available && !!latest
+        if (!shouldOpen) return
+        const dismissed = localStorage.getItem('panwatch_upgrade_dismissed_version') || ''
+        if (dismissed === latest) return
+        setUpgradeInfo({ latest, url: String(res?.release_url || 'https://github.com/sunxiao0721/PanWatch/releases') })
+        setUpgradeOpen(true)
+      })
+      .catch(() => {})
+  }, [version])
 
   // 登录页面不显示导航
   if (location.pathname === '/login') {
@@ -224,6 +249,38 @@ function App() {
         </Routes>
       </main>
       <LogsModal open={logsOpen} onOpenChange={setLogsOpen} />
+      <Dialog open={upgradeOpen} onOpenChange={setUpgradeOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>发现新版本</DialogTitle>
+            <DialogDescription>
+              当前版本 v{version}，可升级到 v{upgradeInfo?.latest}。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="text-[12px] text-muted-foreground">
+            建议升级以获取最新功能和修复。
+          </div>
+          <DialogFooter>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                if (upgradeInfo?.latest) localStorage.setItem('panwatch_upgrade_dismissed_version', upgradeInfo.latest)
+                setUpgradeOpen(false)
+              }}
+            >
+              稍后提醒
+            </Button>
+            <Button
+              onClick={() => {
+                const url = upgradeInfo?.url || 'https://github.com/sunxiao0721/PanWatch/releases'
+                window.open(url, '_blank', 'noopener,noreferrer')
+              }}
+            >
+              去升级
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
     </RequireAuth>
   )

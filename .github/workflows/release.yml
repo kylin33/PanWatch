@@ -153,3 +153,50 @@ jobs:
         with:
           tag_name: ${{ steps.vars.outputs.version }}
           body_path: release-notes.md
+
+      - name: Notify Telegram
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          JOB_STATUS: ${{ job.status }}
+          VERSION: ${{ steps.vars.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]]; then
+            echo "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not configured; skip notify."
+            exit 0
+          fi
+
+          if [[ "${JOB_STATUS}" == "success" ]]; then
+            icon="✅"
+            status_text="发布成功"
+          else
+            icon="❌"
+            status_text="发布失败"
+          fi
+
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ref_name="${{ github.ref_name }}"
+          actor="${{ github.actor }}"
+          event_name="${{ github.event_name }}"
+
+          if [[ -z "${VERSION}" ]]; then
+            VERSION="${ref_name}"
+          fi
+
+          text="${icon} PanWatch Release ${status_text}
+Repository: ${{ github.repository }}
+Version: ${VERSION}
+Ref: ${ref_name}
+Trigger: ${event_name} by ${actor}
+Run: ${run_url}"
+
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            --data-urlencode "disable_web_page_preview=true" \
+            --max-time 20
